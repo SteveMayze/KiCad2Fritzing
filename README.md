@@ -8,6 +8,13 @@ It is not intended to be a photographic-true representation but rather a basic o
 
 ## Building
 
+python3 -m venv .venv
+. .venv/bin/activate
+ 
+pip install -e src
+
+
+
 ## Installing
 
 ## Executing
