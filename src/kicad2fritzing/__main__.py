@@ -1,17 +1,10 @@
-import logging
+"""Package executable module."""
 
-
-logger = None
-
-
-
-
+from kicad2fritzing.cli import main
 
 
 if __name__ == "__main__":
-    logger = logging.getLogger(__name__)
-    logger.debug(f'begin')   
-    logger.debug(f'end')   
+    raise SystemExit(main())
 
 
 

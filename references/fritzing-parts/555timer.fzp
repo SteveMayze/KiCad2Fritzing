@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="UTF-8"?><module fritzingVersion="0.1.beta.1407" moduleId="1001AAAB555Timer">
+<version>4</version>
+ <author>Dirk van Oosterbosch</author>
+ <title>555 Timer</title>
+ <date>2008-11-11</date>
+ <label>U</label>
+ <tags>
+  <tag>555</tag>
+  <tag>Timer</tag>
+  <tag>555 Timer</tag>
+  <tag>IC</tag>
+  <tag>DIL package</tag>
+  <tag>oscillator</tag>
+ </tags>
+ <properties>
+  <property name="family">Timer IC</property>
+ <property name="package">DIP8 [THT]</property>
+</properties>
+<spice>
+    <line>X{instanceTitle} {net connector1} {net connector2} {net connector3} {net connector4} {net connector5} {net connector6} {net connector7} {net connector0} UA555</line>
+    <model>.SUBCKT UA555 32 30 19 23 33 1  21 999
+    *                    TR O  R  F  TH D  V  GND
+    *
+    * Taken from ngspice examples: https://github.com/imr/ngspice/blob/master/examples/p-to-n-examples/555-timer-2.cir and modified to include the ground. And this model has been...
+    * Taken from the Fairchild data book (1982) page 9-3
+    *SYM=UA555
+    *DWG=C:\SPICE\555\UA555.DWG
+    Q4 25 2 3 QP
+    Q5 999 6 3 QP
+    Q6 6 6 8 QP
+    R1 9 21 4.7K
+    R2 3 21 830
+    R3 8 21 4.7K
+    Q7 2 33 5 QN
+    Q8 2 5 17 QN
+    Q9 6 4 17 QN
+    Q10 6 23 4 QN
+    Q11 12 20 10 QP
+    R4 10 21 1K
+    Q12 22 11 12 QP
+    Q13 14 13 12 QP
+    Q14 999 32 11 QP
+    Q15 14 18 13 QP
+    R5 14 999 100K
+    R6 22 999 100K
+    R7 17 999 10K
+    Q16 1 15 999 QN
+    Q17 15 19 31 QP
+    R8 18 23 5K
+    R9 18 999 5K
+    R10 21 23 5K
+    Q18 27 20 21 QP
+    Q19 20 20 21 QP
+    R11 20 31 5K
+    D1 31 24 DA
+    Q20 24 25 999 QN
+    Q21 25 22 999 QN
+    Q22 27 24 999 QN
+    R12 25 27 4.7K
+    R13 21 29 6.8K
+    Q23 21 29 28 QN
+    Q24 29 27 16 QN
+    Q25 30 26 999 QN
+    Q26 21 28 30 QN
+    D2 30 29 DA
+    R14 16 15 100
+    R15 16 26 220
+    R16 16 999 4.7K
+    R17 28 30 3.9K
+    Q3 2 2 9 QP
+    .MODEL DA D (RS=40 IS=1.0E-14 CJO=1PF)
+    .MODEL QP PNP (BF=20 BR=0.02 RC=4 RB=25 IS=1.0E-14 VA=50 NE=2 CJE=12.4P VJE=1.1 MJE=.5 CJC=4.02P VJC=.3 MJC=.3 TF=229P TR=159N)
+    .MODEL QN NPN (IS=5.07F NF=1 BF=100 VAF=161 IKF=30M ISE=3.9P NE=2 BR=4 NR=1 VAR=16 IKR=45M RE=1.03 RB=4.12 RC=.412 XTB=1.5 CJE=12.4P VJE=1.1 MJE=.5 CJC=4.02P VJC=.3 MJC=.3 TF=229P TR=959P)
+ .ENDS
+</model>
+</spice>    
+ <description>The classic 555 general purpose timer/oscillator.</description>
+ <views>
+  <iconView>
+   <layers image="icon/555timericon.svg">
+    <layer layerId="icon"/>
+   </layers>
+  </iconView>
+  <pcbView>
+   <layers image="pcb/dip_8_300mil_pcb.svg">
+    <layer layerId="copper0"/>
+    <layer layerId="keepout"/>
+    <layer layerId="soldermask"/>
+    <layer layerId="silkscreen"/>
+    <layer layerId="outline"/>
+   <layer layerId="copper1"/></layers>
+  </pcbView>
+  <breadboardView>
+   <layers image="breadboard/555timerbreadboard.svg">
+    <layer layerId="breadboard"/>
+   </layers>
+  </breadboardView>
+  <schematicView>
+   <layers image="schematic/555timerschematic.svg">
+    <layer layerId="schematic"/>
+   </layers>
+  </schematicView>
+ </views>
+ <connectors>
+  <connector id="connector3" name="Reset" type="male">
+   <description>Reset</description>
+   <views>
+    <breadboardView>
+     <p layer="breadboard" svgId="connector3pin" terminalId="connector3terminal"/>
+    </breadboardView>
+    <schematicView>
+     <p layer="schematic" svgId="connector3pin" terminalId="connector3terminal"/>
+    </schematicView>
+    <pcbView>
+     <p layer="copper0" svgId="connector3pin"/>
+    <p layer="copper1" svgId="connector3pin"/></pcbView>
+   </views>
+  </connector>
+  <connector id="connector4" name="Control Voltage" type="male">
+   <description>Control Voltage</description>
+   <views>
+    <breadboardView>
+     <p layer="breadboard" svgId="connector4pin" terminalId="connector4terminal"/>
+    </breadboardView>
+    <schematicView>
+     <p layer="schematic" svgId="connector4pin" terminalId="connector4terminal"/>
+    </schematicView>
+    <pcbView>
+     <p layer="copper0" svgId="connector4pin"/>
+    <p layer="copper1" svgId="connector4pin"/></pcbView>
+   </views>
+  </connector>
+  <connector id="connector5" name="Threshold" type="male">
+   <description>Threshold</description>
+   <views>
+    <breadboardView>
+     <p layer="breadboard" svgId="connector5pin" terminalId="connector5terminal"/>
+    </breadboardView>
+    <schematicView>
+     <p layer="schematic" svgId="connector6pin" terminalId="connector6terminal"/>
+    </schematicView>
+    <pcbView>
+     <p layer="copper0" svgId="connector5pin"/>
+    <p layer="copper1" svgId="connector5pin"/></pcbView>
+   </views>
+  </connector>
+  <connector id="connector6" name="Discharge" type="male">
+   <description>Discharge</description>
+   <views>
+    <breadboardView>
+     <p layer="breadboard" svgId="connector6pin" terminalId="connector6terminal"/>
+    </breadboardView>
+    <schematicView>
+     <p layer="schematic" svgId="connector5pin" terminalId="connector5terminal"/>
+    </schematicView>
+    <pcbView>
+     <p layer="copper0" svgId="connector6pin"/>
+    <p layer="copper1" svgId="connector6pin"/></pcbView>
+   </views>
+  </connector>
+  <connector id="connector7" name="Vcc Supply Voltage" type="male">
+   <description>Vcc Supply Voltage</description>
+   <views>
+    <breadboardView>
+     <p layer="breadboard" svgId="connector7pin" terminalId="connector7terminal"/>
+    </breadboardView>
+    <schematicView>
+     <p layer="schematic" svgId="connector7pin" terminalId="connector7terminal"/>
+    </schematicView>
+    <pcbView>
+     <p layer="copper0" svgId="connector7pin"/>
+    <p layer="copper1" svgId="connector7pin"/></pcbView>
+   </views>
+  </connector>
+  <connector id="connector0" name="Ground" type="male">
+   <description>Ground</description>
+   <views>
+    <breadboardView>
+     <p layer="breadboard" svgId="connector0pin" terminalId="connector0terminal"/>
+    </breadboardView>
+    <schematicView>
+     <p layer="schematic" svgId="connector0pin" terminalId="connector0terminal"/>
+    </schematicView>
+    <pcbView>
+     <p layer="copper0" svgId="connector0pin"/>
+    <p layer="copper1" svgId="connector0pin"/></pcbView>
+   </views>
+  </connector>
+  <connector id="connector1" name="Trigger" type="male">
+   <description>Trigger</description>
+   <views>
+    <breadboardView>
+     <p layer="breadboard" svgId="connector1pin" terminalId="connector1terminal"/>
+    </breadboardView>
+    <schematicView>
+     <p layer="schematic" svgId="connector1pin" terminalId="connector1terminal"/>
+    </schematicView>
+    <pcbView>
+     <p layer="copper0" svgId="connector1pin"/>
+    <p layer="copper1" svgId="connector1pin"/></pcbView>
+   </views>
+  </connector>
+  <connector id="connector2" name="Output" type="male">
+   <description>Output</description>
+   <views>
+    <breadboardView>
+     <p layer="breadboard" svgId="connector2pin" terminalId="connector2terminal"/>
+    </breadboardView>
+    <schematicView>
+     <p layer="schematic" svgId="connector2pin" terminalId="connector2terminal"/>
+    </schematicView>
+    <pcbView>
+     <p layer="copper0" svgId="connector2pin"/>
+    <p layer="copper1" svgId="connector2pin"/></pcbView>
+   </views>
+  </connector>
+ </connectors>
+</module>

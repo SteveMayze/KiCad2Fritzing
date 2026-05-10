@@ -1,3 +1,5 @@
+# Ignore KiCad .history directories (project local history)
+references/kicad-projects/**/.history/
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]
@@ -130,3 +132,14 @@ dmypy.json
 
 .venv
 *.code-workspace
+
+# KiCad local/project transient files (scoped to references/kicad-projects only)
+# Keep core sources tracked: *.kicad_pro, *.kicad_pcb, *.kicad_sch
+references/kicad-projects/**/*.kicad_prl
+references/kicad-projects/**/*.kicad_pro-bak
+references/kicad-projects/**/*.kicad_pcb-bak
+references/kicad-projects/**/*.kicad_sch-bak
+references/kicad-projects/**/*.kicad_sym-bak
+references/kicad-projects/**/__autosave-*
+references/kicad-projects/**/*-backups/
+references/kicad-projects/**/fp-info-cache
