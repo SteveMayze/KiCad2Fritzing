@@ -16,6 +16,7 @@ Current status:
 - Board outline is extracted from KiCad `Edge.Cuts` and used in generated SVG board shapes.
 - Supported Edge.Cuts primitives now include `gr_rect`, `gr_line`, `gr_poly`, and `gr_arc`.
 - Artifact consistency validation checks connector IDs across generated files.
+- **Generated `.fzpz` packages** are ready for import directly into Fritzing.
 - Reference artifacts are organized under `references/`.
 
 ## Repository Layout

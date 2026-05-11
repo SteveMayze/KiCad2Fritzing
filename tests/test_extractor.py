@@ -16,17 +16,32 @@ from kicad2fritzing.core.extractor import (
 
 
 def test_export_board_to_fritzing_stub_creates_readme(tmp_path: Path) -> None:
+    import zipfile
+    
     board_file = tmp_path / "demo.kicad_pcb"
     board_file.write_text("(kicad_pcb)", encoding="utf-8")
 
     out_dir = tmp_path / "result"
     output_file = export_board_to_fritzing_stub(board_file, out_dir)
 
-    assert output_file == out_dir / "README.txt"
+    # Now returns the .fzpz package file instead of README.txt
+    assert output_file == out_dir / "generated_part.fzpz"
     assert output_file.exists()
-
-    content = output_file.read_text(encoding="utf-8")
-    assert "KiCad2Fritzing placeholder output" in content
+    
+    # Verify it's a valid ZIP archive
+    with zipfile.ZipFile(output_file) as zf:
+        names = zf.namelist()
+        assert "generated_part.fzp" in names
+        assert "breadboard.svg" in names
+        assert "schematic.svg" in names
+        assert "pcb.svg" in names
+        assert "icon.svg" in names
+    
+    # README.txt should still exist
+    readme = out_dir / "README.txt"
+    assert readme.exists()
+    content = readme.read_text(encoding="utf-8")
+    assert "KiCad2Fritzing conversion output" in content
     assert f"Source board: {board_file}" in content
 
 

@@ -1,73 +1,197 @@
+"""Build a KiCad PCM-compatible addon zip for KiCad2Fritzing.
+
+The Plugin and Content Manager (PCM) requires a specific archive layout:
+
+    Archive root
+    ├── metadata.json          # package metadata (no download_* fields)
+    ├── plugins/
+    │   ├── KiCad2Fritzing_action.py   # top-level action plugin entry
+    │   └── kicad2fritzing/            # helper package
+    │       └── ...
+    └── resources/             # optional 64x64 icon.png
+
+Run from repository root:
+    python3 scripts/build_kicad10_dist.py
+
+Outputs:
+    dist/kicad2fritzing-pcm/   – exploded archive directory (inspect / debug)
+    dist/KiCad2Fritzing-pcm.zip – PCM-installable zip ("Install from File…")
+
+Before distributing publicly, update the TODO fields in METADATA below with
+your real GitHub username / contact details, then re-run this script.
+"""
+
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Load personal build config (gitignored).
+# Copy scripts/build_config.json.example → scripts/build_config.json and
+# fill in your details. Falls back to placeholder values if the file is absent.
+# ---------------------------------------------------------------------------
+_CONFIG_FILE = Path(__file__).parent / "build_config.json"
+
+if _CONFIG_FILE.exists():
+    _config: dict = json.loads(_CONFIG_FILE.read_text(encoding="utf-8"))
+else:
+    _config = {}
+
+_USERNAME = _config.get("username", "YOURUSERNAME")
+_AUTHOR_NAME = _config.get("author_name", "KiCad2Fritzing Contributors")
+_CONTACT_WEB = _config.get("contact_web", f"https://github.com/{_USERNAME}/KiCad2Fritzing")
+
+# ---------------------------------------------------------------------------
+# Package metadata
+# NOTE: download_url / download_sha256 / download_size are intentionally
+# omitted here – they belong only in the repository submission metadata, NOT
+# inside the archive itself (see KiCad PCM docs).
+# ---------------------------------------------------------------------------
+METADATA: dict = {
+    "$schema": "https://go.kicad.org/pcm/schemas/v2",
+    "name": "KiCad2Fritzing",
+    "description": "Export KiCad board layouts to Fritzing starter assets.",
+    "description_full": (
+        "KiCad2Fritzing is an action plugin for the KiCad PCB editor that "
+        "extracts board layout information — footprints, pads, nets, and board "
+        "outline — and generates Fritzing-compatible part files (.fzp) and SVG "
+        "views ready for use in Fritzing."
+    ),
+    "identifier": f"com.github.{_USERNAME}.kicad2fritzing",
+    "type": "plugin",
+    "author": {
+        "name": _AUTHOR_NAME,
+        "contact": {
+            "web": _CONTACT_WEB,
+        },
+    },
+    "license": "MIT",
+    "resources": {
+        "homepage": _CONTACT_WEB,
+    },
+    "versions": [
+        {
+            "version": "0.1.0",
+            "status": "development",
+            "kicad_version": "10.0",
+            "runtime": "swig",
+        }
+    ],
+}
+
+# Top-level action-plugin entry point written into plugins/.
+# KiCad scans files at this level to discover ActionPlugin subclasses.
+_PLUGIN_ENTRY = "\n".join(
+    [
+        '"""KiCad Action Plugin entry point for KiCad2Fritzing (PCM-installed)."""',
+        "from __future__ import annotations",
+        "",
+        "import sys",
+        "from pathlib import Path",
+        "",
+        "# Always write a diagnostic log to help debug plugin discovery issues.",
+        "_plugins_dir = Path(__file__).parent",
+        '_log_path = _plugins_dir / "kicad2fritzing_plugin_discovery.log"',
+        "",
+        "def _write_log(msg: str) -> None:",
+        '    """Write diagnostic log, creating or appending as needed."""',
+        "    try:",
+        "        existing = _log_path.read_text(encoding='utf-8') if _log_path.exists() else ''",
+        '        _log_path.write_text(existing + msg + "\\n", encoding="utf-8")',
+        "    except Exception:",
+        "        pass  # Silently fail if we can't write the log",
+        "",
+        "# Make the sibling kicad2fritzing package importable when KiCad loads this file.",
+        "if str(_plugins_dir) not in sys.path:",
+        "    sys.path.insert(0, str(_plugins_dir))",
+        "",
+        '_write_log("=== KiCad2Fritzing plugin loader invoked ===")',
+        "",
+        "# Check if SWIG pcbnew is available (required for ActionPlugin in KiCad 10).",
+        "_pcbnew_available = False",
+        "try:",
+        "    import pcbnew  # type: ignore",
+        "",
+        "    _pcbnew_available = True",
+        '    _write_log("✓ pcbnew module imported successfully")',
+        "except ImportError as e:",
+        '    _write_log(f"✗ pcbnew import failed: {e}")',
+        '    _write_log("  (SWIG bindings deprecated in KiCad 10+; migrate to IPC API)")',
+        "",
+        "if not _pcbnew_available:",
+        '    _write_log("Plugin registration skipped: SWIG runtime not available")',
+        "else:",
+        "    try:",
+        "        from kicad2fritzing.kicad.plugin import register_plugin  # noqa: E402",
+        "",
+        "        _registered = register_plugin()",
+        "        if _registered:",
+        '            _write_log("✓ register_plugin() succeeded")',
+        "        else:",
+        '            _write_log("✗ register_plugin() returned False")',
+        "    except Exception as e:",
+        "        import traceback",
+        "",
+        '        _write_log("✗ Plugin registration failed with exception:")',
+        "        _write_log(traceback.format_exc())",
+    ]
+)
 
 
 def _copy_package(src: Path, dst: Path) -> None:
     if dst.exists():
         shutil.rmtree(dst)
 
-    def ignore_filter(_dir: str, names: list[str]) -> set[str]:
-        ignored = {"__pycache__"}
-        ignored.update({name for name in names if name.endswith(".pyc")})
-        return ignored
+    def _ignore(_dir: str, names: list[str]) -> set[str]:
+        skip = {"__pycache__"}
+        skip.update(n for n in names if n.endswith((".pyc", ".code-workspace")))
+        return skip
 
-    shutil.copytree(src, dst, ignore=ignore_filter)
+    shutil.copytree(src, dst, ignore=_ignore)
 
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
     src_pkg = repo_root / "src" / "kicad2fritzing"
     dist_root = repo_root / "dist"
-    kicad_dist = dist_root / "kicad10-action-plugin"
-    plugin_root = kicad_dist / "KiCad2Fritzing"
+    archive_root = dist_root / "kicad2fritzing-pcm"
 
-    if kicad_dist.exists():
-        shutil.rmtree(kicad_dist)
-    kicad_dist.mkdir(parents=True, exist_ok=True)
-    plugin_root.mkdir(parents=True, exist_ok=True)
+    # ---- (re)build the exploded archive directory --------------------------
+    if archive_root.exists():
+        shutil.rmtree(archive_root)
+    archive_root.mkdir(parents=True)
 
-    plugin_entry = plugin_root / "KiCad2Fritzing.py"
-    plugin_entry.write_text(
-        "\n".join(
-            [
-                '"""KiCad 10 Action Plugin entrypoint for KiCad2Fritzing."""',
-                "",
-                "from __future__ import annotations",
-                "",
-                "import sys",
-                "from pathlib import Path",
-                "",
-                "PLUGIN_DIR = Path(__file__).resolve().parent",
-                "if str(PLUGIN_DIR) not in sys.path:",
-                "    sys.path.insert(0, str(PLUGIN_DIR))",
-                "",
-                "from kicad2fritzing.kicad.plugin import register_plugin",
-                "",
-                "register_plugin()",
-                "",
-            ]
-        ),
+    # metadata.json at archive root (no download_* keys – those are repo-only)
+    (archive_root / "metadata.json").write_text(
+        json.dumps(METADATA, indent=4, ensure_ascii=False),
         encoding="utf-8",
     )
 
-    _copy_package(src_pkg, plugin_root / "kicad2fritzing")
+    # plugins/ – top-level entry + package
+    plugins_dir = archive_root / "plugins"
+    plugins_dir.mkdir()
+    (plugins_dir / "__init__.py").write_text(_PLUGIN_ENTRY, encoding="utf-8")
+    # Use lowercase action filename for stable behavior across platforms.
+    (plugins_dir / "kicad2fritzing_action.py").write_text(_PLUGIN_ENTRY, encoding="utf-8")
+    _copy_package(src_pkg, plugins_dir / "kicad2fritzing")
 
-    (plugin_root / "README.txt").write_text(
-        "KiCad2Fritzing Action Plugin for KiCad 10.\\n"
-        "Copy this KiCad2Fritzing folder into KiCad's scripting/plugins directory.\\n",
-        encoding="utf-8",
-    )
+    # resources/ – placeholder; drop a 64×64 icon.png here to show in PCM
+    (archive_root / "resources").mkdir()
 
-    zip_base = dist_root / "KiCad2Fritzing-kicad10-action-plugin"
-    if (zip_base.with_suffix(".zip")).exists():
-        (zip_base.with_suffix(".zip")).unlink()
+    # ---- zip ---------------------------------------------------------------
+    zip_path = dist_root / "KiCad2Fritzing-pcm.zip"
+    if zip_path.exists():
+        zip_path.unlink()
+    shutil.make_archive(str(zip_path.with_suffix("")), "zip", root_dir=archive_root)
 
-    shutil.make_archive(str(zip_base), "zip", root_dir=kicad_dist, base_dir="KiCad2Fritzing")
-
-    print(f"Built plugin directory: {plugin_root}")
-    print(f"Built plugin zip: {zip_base.with_suffix('.zip')}")
+    print(f"Exploded archive : {archive_root}")
+    print(f"PCM zip          : {zip_path}")
+    print()
+    if "YOURUSERNAME" in METADATA["identifier"]:
+        print("⚠  TODO: update 'identifier', 'author', and 'resources' in METADATA")
+        print("   at the top of this script before distributing publicly.")
     return 0
 
 

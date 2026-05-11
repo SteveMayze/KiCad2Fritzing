@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import math
 import re
+import zipfile
 from xml.etree import ElementTree as ET
 from pathlib import Path
 
@@ -752,8 +753,65 @@ def write_artifact_validation_report(report: dict, out_dir: Path) -> Path:
     return output_file
 
 
+def build_fritzing_package_zip(out_dir: Path) -> Path:
+    """Build a .fzpz (Fritzing shareable part) ZIP package from generated files.
+    
+    A .fzpz file is a ZIP archive containing:
+    - generated_part.fzp (part definition)
+    - SVG view files (breadboard.svg, schematic.svg, pcb.svg, icon.svg)
+    
+    Args:
+        out_dir: Output directory containing .fzp and .svg files.
+    
+    Returns:
+        Path to generated .fzpz file.
+    
+    Raises:
+        FileNotFoundError: If required .fzp or SVG files are missing.
+    """
+    fzp_file = out_dir / "generated_part.fzp"
+    if not fzp_file.exists():
+        raise FileNotFoundError(f"Missing {fzp_file}")
+    
+    required_svgs = ["icon.svg", "breadboard.svg", "schematic.svg", "pcb.svg"]
+    missing_svgs = [svg for svg in required_svgs if not (out_dir / svg).exists()]
+    if missing_svgs:
+        raise FileNotFoundError(f"Missing SVG files: {missing_svgs}")
+    
+    package_path = out_dir / "generated_part.fzpz"
+    
+    # Create ZIP archive with proper Fritzing package structure.
+    with zipfile.ZipFile(package_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        # Add .fzp file at archive root (not in a subdirectory).
+        zf.write(fzp_file, arcname="generated_part.fzp")
+        
+        # Add SVG files at archive root.
+        for svg in required_svgs:
+            svg_path = out_dir / svg
+            if svg_path.exists():
+                zf.write(svg_path, arcname=svg)
+    
+    return package_path
+
+
 def export_board_to_fritzing_stub(board_file: Path, out_dir: Path) -> Path:
-    """Create a placeholder conversion output for initial project wiring."""
+    """Create a placeholder conversion output for initial project wiring.
+    
+    Generates:
+    - board_model.json: Intermediate representation of KiCad board
+    - fritzing_connectors.json: Connector and pin mapping
+    - generated_part.fzp: Fritzing part definition (XML)
+    - SVG view files: breadboard, schematic, pcb, icon
+    - generated_part.fzpz: Packaged Fritzing shareable part (ZIP archive)
+    - artifact_validation.json: Consistency checks
+    
+    Args:
+        board_file: Path to .kicad_pcb file.
+        out_dir: Output directory for generated files.
+    
+    Returns:
+        Path to generated_part.fzpz (Fritzing shareable part package).
+    """
     out_dir.mkdir(parents=True, exist_ok=True)
 
     model = parse_kicad_board_to_model(board_file)
@@ -765,17 +823,28 @@ def export_board_to_fritzing_stub(board_file: Path, out_dir: Path) -> Path:
     report = validate_generated_artifacts(connector_model, out_dir)
     write_artifact_validation_report(report, out_dir)
 
+    # Build Fritzing shareable part package (.fzpz = ZIP archive).
+    package_path = build_fritzing_package_zip(out_dir)
+
     output_file = out_dir / "README.txt"
     output_file.write_text(
-        "KiCad2Fritzing placeholder output\n"
+        "KiCad2Fritzing conversion output\n"
         f"Source board: {board_file}\n"
         "\n"
-        "Intermediate model: board_model.json\n"
-        "Connector model: fritzing_connectors.json\n"
-        "Generated part: generated_part.fzp\n"
-        "Generated SVG views: icon.svg, breadboard.svg, schematic.svg, pcb.svg\n"
-        "Artifact validation: artifact_validation.json\n"
+        "Generated files:\n"
+        "  Intermediate model: board_model.json\n"
+        "  Connector model: fritzing_connectors.json\n"
+        "  Fritzing part definition: generated_part.fzp\n"
+        "  SVG views: icon.svg, breadboard.svg, schematic.svg, pcb.svg\n"
+        "  Fritzing shareable part: generated_part.fzpz (ready to import)\n"
+        "  Validation report: artifact_validation.json\n"
+        "\n"
+        "To import into Fritzing:\n"
+        "  1. Open Fritzing\n"
+        "  2. Right-click in the 'Mine' bin → Import...\n"
+        "  3. Select generated_part.fzpz\n"
+        "\n"
         "Next step: refine SVG geometry from real board footprint data.\n",
         encoding="utf-8",
     )
-    return output_file
+    return package_path

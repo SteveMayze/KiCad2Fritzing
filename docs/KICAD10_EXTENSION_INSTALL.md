@@ -1,41 +1,92 @@
 # KiCad 10 Extension Install Guide
 
-This project provides a KiCad Action Plugin distribution for KiCad 10.
+This project ships as a KiCad **Plugin and Content Manager (PCM)** compatible addon package.
 
-## Build The Distribution Artifacts
+---
 
-From repository root:
+## 1. Build the PCM Package
 
+From the repository root:
+
+```
 python3 scripts/build_kicad10_dist.py
+```
 
 Artifacts produced:
-- `dist/kicad10-action-plugin/KiCad2Fritzing/` (folder install)
-- `dist/KiCad2Fritzing-kicad10-action-plugin.zip` (zip install)
 
-## Install On macOS (KiCad 10)
+| Path | Purpose |
+|------|---------|
+| `dist/kicad2fritzing-pcm/` | Exploded archive (useful for inspection / debugging) |
+| `dist/KiCad2Fritzing-pcm.zip` | PCM-installable zip — use this to install |
 
-KiCad 10 Action Plugins are loaded from:
+### Before distributing publicly
 
-`~/Library/Application Support/kicad/10.0/scripting/plugins`
+Open `scripts/build_kicad10_dist.py` and update the `METADATA` dictionary at the top of
+the file with your real details:
 
-Install options:
-1. Folder install:
-   - Copy `dist/kicad10-action-plugin/KiCad2Fritzing` into the plugins directory.
-2. Zip install:
-   - Unzip `dist/KiCad2Fritzing-kicad10-action-plugin.zip`.
-   - Copy the extracted `KiCad2Fritzing` folder into the plugins directory.
+- `identifier` — reverse-DNS identifier, e.g. `com.github.YOURUSERNAME.kicad2fritzing`
+- `author.name` and `author.contact.web`
+- `resources.homepage`
 
-## Enable The Plugin
+Then re-run the build script.
 
-1. Launch KiCad PCB Editor (`pcbnew`).
-2. Open an existing `.kicad_pcb` board.
-3. Use Tools -> External Plugins and locate `KiCad2Fritzing`.
-4. Run it.
+---
 
-The plugin writes conversion artifacts into a `fritzing-part` folder next to the open board.
+## 2. Install via Plugin and Content Manager ("Install from File…")
+
+This is the recommended method and requires no manual folder copying.
+
+1. Open **KiCad** (the main launcher, not the PCB editor).
+2. Click **Plugin and Content Manager** (the puzzle-piece icon on the toolbar).
+3. In the PCM dialog click **Install from File…** (bottom-left).
+4. Browse to `dist/KiCad2Fritzing-pcm.zip` and open it.
+5. KiCad will validate the package metadata and install it.
+6. Click **Apply Pending Changes**.
+7. Restart KiCad when prompted.
+
+---
+
+## 3. Use the Plugin
+
+1. Open the **PCB Editor** (`pcbnew`) with an existing `.kicad_pcb` board.
+2. Select **Tools → External Plugins → KiCad2Fritzing**.
+3. The plugin writes conversion output into a `fritzing-part/` folder alongside the open board file.
+
+---
+
+## Archive Structure (for reference)
+
+The PCM zip follows the required KiCad addon layout:
+
+```
+KiCad2Fritzing-pcm.zip
+├── metadata.json                    # PCM package descriptor
+├── plugins/
+│   ├── __init__.py                 # compatibility loader entry
+│   ├── kicad2fritzing_action.py    # top-level action plugin entry (scanned by KiCad)
+│   └── kicad2fritzing/             # helper package
+│       ├── __init__.py
+│       ├── cli.py
+│       ├── core/
+│       └── kicad/
+└── resources/                       # optional 64×64 icon.png
+```
+
+The `metadata.json` in the zip does **not** contain `download_url`, `download_sha256`,
+or `download_size` — those fields belong only in the repository submission metadata,
+not in the archive itself (per the KiCad PCM specification).
+
+---
 
 ## Troubleshooting
 
-- If plugin does not appear, verify the folder path exactly matches the KiCad 10 plugin location.
-- Restart KiCad after copying plugin files.
-- Remove older copies of the plugin from other plugin folders to avoid conflicts.
+| Symptom | Fix |
+|---------|-----|
+| PCM rejects the zip | Ensure you ran the build script — do not manually re-zip the exploded directory, as path order matters |
+| Plugin does not appear in Tools → External Plugins | In PCM uninstall KiCad2Fritzing, close KiCad, reinstall from `dist/KiCad2Fritzing-pcm.zip`, then restart KiCad |
+| Import error on run | Check the KiCad scripting console (`pcbnew` → View → Scripting Console) for the Python traceback |
+| `pcbnew` module not found | The plugin must be run from inside KiCad; it cannot be executed standalone |
+| Reveal Plugins folder is empty | Expected for PCM installs in KiCad 10. PCM installs plugin packages under `~/Documents/KiCad/10.0/3rdparty/plugins/<package-id>/`, not in the legacy `scripting/plugins` folder |
+| Still missing after reinstall | Check for `kicad2fritzing_plugin_discovery.log` under `~/Documents/KiCad/10.0/3rdparty/plugins/com_github_<username>_kicad2fritzing/`; share the contents to diagnose |
+| SWIG bindings unavailable | KiCad 10 deprecated SWIG Python bindings; they may not be included or enabled in your KiCad build. Check the log file for `✗ pcbnew import failed` message |
+
