@@ -7,11 +7,13 @@ import math
 import re
 import zipfile
 from xml.etree import ElementTree as ET
+from xml.sax.saxutils import escape
 from pathlib import Path
 
 
 FOOTPRINT_START_RE = re.compile(r'^\(footprint\s+"([^"]+)"')
 GR_RECT_START_RE = re.compile(r'^\(gr_rect\b')
+GR_TEXT_START_RE = re.compile(r'^\(gr_text\s+"((?:[^"\\]|\\.)*)"')
 GR_LINE_START_RE = re.compile(r'^\(gr_line\b')
 GR_POLY_START_RE = re.compile(r'^\(gr_poly\b')
 GR_ARC_START_RE = re.compile(r'^\(gr_arc\b')
@@ -22,13 +24,27 @@ PAD_START_RE = re.compile(r'^\(pad\s+"([^"]+)"')
 NET_DECL_RE = re.compile(r'^\(net\s+\d+\s+"([^"]+)"\)')
 NET_ANY_RE = re.compile(r'\(net(?:\s+\d+)?\s+"([^"]+)"\)')
 PINFUNCTION_RE = re.compile(r'\(pinfunction\s+"([^"]+)"\)')
+FP_TEXT_RE = re.compile(r'^\(fp_text\s+(\w+)\s+"([^"]*)"')
+FP_LINE_START_RE = re.compile(r'^\(fp_line\b')
+FP_POLY_START_RE = re.compile(r'^\(fp_poly\b')
 START_RE = re.compile(r'\(start\s+([-\d.]+)\s+([-\d.]+)\)')
 MID_RE = re.compile(r'\(mid\s+([-\d.]+)\s+([-\d.]+)\)')
 END_RE = re.compile(r'\(end\s+([-\d.]+)\s+([-\d.]+)\)')
 XY_RE = re.compile(r'\(xy\s+([-\d.]+)\s+([-\d.]+)\)')
 LAYER_RE = re.compile(r'\(layer\s+"([^"]+)"\)')
+SIZE_RE = re.compile(r'\(size\s+([-\d.]+)\s+([-\d.]+)\)')
+WIDTH_RE = re.compile(r'\(width\s+([-\d.]+)\)')
+THICKNESS_RE = re.compile(r'\(thickness\s+([-\d.]+)\)')
+HIDE_RE = re.compile(r'\(hide\s+yes\)')
 POWER_NET_HINTS = {"V+", "VCC", "VIN", "5V", "3V3", "3.3V", "GND"}
 POWER_NET_HINTS_UPPER = {n.upper() for n in POWER_NET_HINTS}
+VIEW_IMAGE_PATHS = {
+    "icon": "icon/icon.svg",
+    "breadboard": "breadboard/breadboard.svg",
+    "schematic": "schematic/schematic.svg",
+    "pcb": "pcb/pcb.svg",
+}
+GENERIC_PINFUNCTION_RE = re.compile(r"^pin[_\s-]*\d+$", re.IGNORECASE)
 
 
 def _rotate_point(x: float, y: float, angle_deg: float) -> tuple[float, float]:
@@ -58,6 +74,119 @@ def _extract_block(lines: list[str], start_index: int) -> tuple[list[str], int]:
 def _is_edge_cuts_block(block_text: str) -> bool:
     layer_match = LAYER_RE.search(block_text)
     return bool(layer_match and layer_match.group(1) == "Edge.Cuts")
+
+
+def _is_front_silks_block(block_text: str) -> bool:
+    layer_match = LAYER_RE.search(block_text)
+    return bool(layer_match and layer_match.group(1) == "F.SilkS")
+
+
+def _decode_kicad_text(text: str) -> str:
+    return text.replace(r'\n', '\n').replace(r'\"', '"').strip()
+
+
+def _transform_to_board_space(
+    x: float,
+    y: float,
+    footprint_at: list[float],
+) -> tuple[float, float]:
+    fp_x = float(footprint_at[0])
+    fp_y = float(footprint_at[1])
+    fp_rot = float(footprint_at[2])
+    rotated_x, rotated_y = _rotate_point(x, y, fp_rot)
+    return fp_x + rotated_x, fp_y + rotated_y
+
+
+def _text_style_from_block(block_text: str) -> tuple[float, float]:
+    size_match = SIZE_RE.search(block_text)
+    thickness_match = THICKNESS_RE.search(block_text)
+    size_y = float(size_match.group(2)) if size_match else 1.0
+    thickness = float(thickness_match.group(1)) if thickness_match else 0.15
+    return size_y, thickness
+
+
+def _project_mm_to_svg(
+    x_mm: float,
+    y_mm: float,
+    bounds: tuple[float, float, float, float],
+    height: int,
+    margin: int,
+    scale: float,
+) -> tuple[float, float]:
+    min_x, min_y, _, _ = bounds
+    x = margin + ((x_mm - min_x) * scale)
+    y = margin + ((y_mm - min_y) * scale)
+    return round(x, 3), round(y, 3)
+
+
+def _render_svg_silkscreen(
+    board_model: dict | None,
+    bounds: tuple[float, float, float, float],
+    width: int,
+    height: int,
+    margin: int,
+    scale: float,
+    color: str,
+) -> str:
+    silkscreen = (board_model or {}).get("silkscreen", {})
+    parts: list[str] = []
+
+    for polygon in silkscreen.get("polygons", []):
+        points_mm = polygon.get("points_mm", [])
+        if len(points_mm) < 3:
+            continue
+        projected = [
+            _project_mm_to_svg(float(pt["x"]), float(pt["y"]), bounds, height, margin, scale)
+            for pt in points_mm
+        ]
+        points_attr = " ".join(f"{x},{y}" for x, y in projected)
+        parts.append(
+            f'<polygon points="{points_attr}" fill="{color}" stroke="none" opacity="0.92"/>'
+        )
+
+    for line in silkscreen.get("lines", []):
+        start = line.get("start_mm")
+        end = line.get("end_mm")
+        if not start or not end:
+            continue
+        x1, y1 = _project_mm_to_svg(float(start["x"]), float(start["y"]), bounds, height, margin, scale)
+        x2, y2 = _project_mm_to_svg(float(end["x"]), float(end["y"]), bounds, height, margin, scale)
+        stroke_width = max(0.5, round(float(line.get("stroke_width_mm", 0.15)) * scale, 3))
+        parts.append(
+            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
+            f'stroke="{color}" stroke-width="{stroke_width}" stroke-linecap="round" opacity="0.92"/>'
+        )
+
+    for text_item in silkscreen.get("texts", []):
+        raw_text = str(text_item.get("text", "")).strip()
+        if not raw_text:
+            continue
+        x, y = _project_mm_to_svg(
+            float(text_item.get("x_mm", 0.0)),
+            float(text_item.get("y_mm", 0.0)),
+            bounds,
+            height,
+            margin,
+            scale,
+        )
+        font_size = max(3.0, round(float(text_item.get("size_mm", 1.0)) * scale, 3))
+        angle = -float(text_item.get("rotation_deg", 0.0))
+        transform = f' transform="rotate({round(angle, 3)} {x} {y})"' if angle else ""
+        lines = raw_text.splitlines() or [raw_text]
+        line_step = round(font_size * 1.15, 3)
+        first_dy = round(-((len(lines) - 1) * line_step) / 2, 3)
+        tspans: list[str] = []
+        for idx, line_text in enumerate(lines):
+            dy = first_dy if idx == 0 else line_step
+            tspans.append(f'<tspan x="{x}" dy="{dy}">{escape(line_text)}</tspan>')
+        parts.append(
+            f'<text x="{x}" y="{y}" font-size="{font_size}" font-family="sans-serif" '
+            f'fill="{color}" text-anchor="middle" dominant-baseline="middle" opacity="0.96"{transform}>'
+            + "".join(tspans)
+            + '</text>'
+        )
+
+    return "".join(parts)
 
 
 def _approximate_arc_points(
@@ -171,6 +300,75 @@ def _build_polygon_from_segments(
     return [{"x": round(p[0], 6), "y": round(p[1], 6)} for p in chain]
 
 
+def _is_pin_header_footprint(footprint: dict) -> bool:
+    footprint_name = str(footprint.get("footprint", "")).lower()
+    value = str(footprint.get("value", "")).lower()
+
+    if "pinheader" in footprint_name or "pin_header" in footprint_name:
+        return True
+
+    # Common legacy naming when symbol/footprint text doesn't include "PinHeader".
+    if value.startswith("conn_01x") and "connector" in footprint_name:
+        return True
+
+    return False
+
+
+def _normalize_pinfunction(pinfunction: str) -> str:
+    text = pinfunction.strip()
+    if not text:
+        return ""
+    if GENERIC_PINFUNCTION_RE.match(text):
+        return ""
+    # Many connector symbols emit auto tokens like P1_1 or 1_1.
+    if re.match(r"^[A-Za-z]*\d*_\d+$", text):
+        return ""
+    return text
+
+
+def _choose_header_label(footprint: dict) -> str:
+    user_labels_raw = [s.strip() for s in footprint.get("silkscreen_user_labels", []) if s.strip()]
+    user_labels: list[str] = []
+    for label in user_labels_raw:
+        if "${" in label:
+            continue
+        # Ignore labels that are usually per-pin markers or numeric pin hints.
+        if label.isdigit():
+            continue
+        if len(label) < 2:
+            continue
+        user_labels.append(label)
+
+    unique_labels = list(dict.fromkeys(user_labels))
+    if len(unique_labels) == 1:
+        return unique_labels[0]
+
+    reference = str(footprint.get("reference", "")).strip()
+    if reference:
+        return reference
+
+    return "HEADER"
+
+
+def _is_public_silkscreen_footprint(footprint: dict) -> bool:
+    return not bool(footprint.get("pads"))
+
+
+def _tight_canvas_size(
+    points: list[tuple[float, float]],
+    fallback: tuple[int, int],
+    padding: int,
+) -> tuple[int, int]:
+    if not points:
+        return fallback
+
+    max_x = max(point[0] for point in points)
+    max_y = max(point[1] for point in points)
+    width = max(int(math.ceil(max_x + padding)), 2 * padding)
+    height = max(int(math.ceil(max_y + padding)), 2 * padding)
+    return width, height
+
+
 def parse_kicad_board_to_model(board_file: Path) -> dict:
     """Parse a KiCad PCB file into a small intermediate model for conversion."""
     text = board_file.read_text(encoding="utf-8")
@@ -180,6 +378,9 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
     nets: set[str] = set()
     board_outline_polygons: list[list[dict[str, float]]] = []
     board_outline_segments: list[tuple[tuple[float, float], tuple[float, float]]] = []
+    silkscreen_texts: list[dict] = []
+    silkscreen_lines: list[dict] = []
+    silkscreen_polygons: list[dict] = []
 
     for line in lines:
         stripped = line.strip()
@@ -216,6 +417,42 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
                         {"x": min_x, "y": max_y},
                     ]
                 )
+            elif _is_front_silks_block(gr_text) and start_match and end_match:
+                sx = float(start_match.group(1))
+                sy = float(start_match.group(2))
+                ex = float(end_match.group(1))
+                ey = float(end_match.group(2))
+                min_x, max_x = (sx, ex) if sx <= ex else (ex, sx)
+                min_y, max_y = (sy, ey) if sy <= ey else (ey, sy)
+                silkscreen_polygons.append(
+                    {
+                        "points_mm": [
+                            {"x": min_x, "y": min_y},
+                            {"x": max_x, "y": min_y},
+                            {"x": max_x, "y": max_y},
+                            {"x": min_x, "y": max_y},
+                        ]
+                    }
+                )
+            continue
+
+        if GR_TEXT_START_RE.match(stripped):
+            gr_block, idx = _extract_block(lines, idx)
+            gr_text = " ".join(s.strip() for s in gr_block)
+            text_match = GR_TEXT_START_RE.match(stripped)
+            at_match = AT_ANY_RE.search(gr_text)
+            if text_match and at_match and _is_front_silks_block(gr_text) and not HIDE_RE.search(gr_text):
+                size_y, thickness = _text_style_from_block(gr_text)
+                silkscreen_texts.append(
+                    {
+                        "text": _decode_kicad_text(text_match.group(1)),
+                        "x_mm": float(at_match.group(1)),
+                        "y_mm": float(at_match.group(2)),
+                        "rotation_deg": float(at_match.group(3) or 0.0),
+                        "size_mm": size_y,
+                        "thickness_mm": thickness,
+                    }
+                )
             continue
 
         if GR_LINE_START_RE.match(stripped):
@@ -229,6 +466,15 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
                 ex = float(end_match.group(1))
                 ey = float(end_match.group(2))
                 board_outline_segments.append(((sx, sy), (ex, ey)))
+            elif _is_front_silks_block(gr_text) and start_match and end_match:
+                width_match = WIDTH_RE.search(gr_text)
+                silkscreen_lines.append(
+                    {
+                        "start_mm": {"x": float(start_match.group(1)), "y": float(start_match.group(2))},
+                        "end_mm": {"x": float(end_match.group(1)), "y": float(end_match.group(2))},
+                        "stroke_width_mm": float(width_match.group(1)) if width_match else 0.15,
+                    }
+                )
             continue
 
         if GR_ARC_START_RE.match(stripped):
@@ -256,6 +502,13 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
                 ]
                 if len(points) >= 3:
                     board_outline_polygons.append(points)
+            elif _is_front_silks_block(gr_text):
+                points = [
+                    {"x": float(x), "y": float(y)}
+                    for x, y in XY_RE.findall(gr_text)
+                ]
+                if len(points) >= 3:
+                    silkscreen_polygons.append({"points_mm": points})
             continue
 
         fp_match = FOOTPRINT_START_RE.match(stripped)
@@ -271,8 +524,12 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
             "value": "",
             "footprint": footprint_name,
             "at": [0.0, 0.0, 0.0],
+            "silkscreen_user_labels": [],
             "pads": [],
         }
+        footprint_silkscreen_texts: list[dict] = []
+        footprint_silkscreen_lines: list[dict] = []
+        footprint_silkscreen_polygons: list[dict] = []
 
         fp_line_index = 0
         while fp_line_index < len(fp_block):
@@ -280,11 +537,52 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
 
             prop_match = PROPERTY_RE.match(fp_line)
             if prop_match:
+                prop_block, new_fp_idx = _extract_block(fp_block, fp_line_index)
                 key, value = prop_match.group(1), prop_match.group(2)
                 if key == "Reference":
                     footprint["reference"] = value
                 elif key == "Value":
                     footprint["value"] = value
+                fp_line_index = new_fp_idx
+                continue
+
+            fp_text_match = FP_TEXT_RE.match(fp_line)
+            if fp_text_match:
+                fp_text_block, new_fp_idx = _extract_block(fp_block, fp_line_index)
+                fp_text_kind = fp_text_match.group(1)
+                fp_text_value = _decode_kicad_text(fp_text_match.group(2))
+                fp_text_all = " ".join(s.strip() for s in fp_text_block)
+                layer_match = LAYER_RE.search(fp_text_all)
+                if (
+                    fp_text_kind == "user"
+                    and fp_text_value.strip()
+                    and "${" not in fp_text_value
+                    and layer_match
+                    and layer_match.group(1) == "F.SilkS"
+                ):
+                    footprint["silkscreen_user_labels"].append(fp_text_value.strip())
+                if (
+                    fp_text_value.strip()
+                    and "${" not in fp_text_value
+                    and fp_text_kind not in {"reference", "value"}
+                    and _is_front_silks_block(fp_text_all)
+                    and not HIDE_RE.search(fp_text_all)
+                ):
+                    at_match = AT_ANY_RE.search(fp_text_all)
+                    if at_match:
+                        size_y, thickness = _text_style_from_block(fp_text_all)
+                        footprint_silkscreen_texts.append(
+                            {
+                                "text": fp_text_value,
+                                "x_mm": float(at_match.group(1)),
+                                "y_mm": float(at_match.group(2)),
+                                "rotation_deg": float(at_match.group(3) or 0.0),
+                                "size_mm": size_y,
+                                "thickness_mm": thickness,
+                            }
+                        )
+                fp_line_index = new_fp_idx
+                continue
 
             at_match = AT_RE.match(fp_line)
             if at_match and footprint["at"] == [0.0, 0.0, 0.0]:
@@ -321,7 +619,85 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
                 fp_line_index = new_fp_idx
                 continue
 
+            if FP_LINE_START_RE.match(fp_line):
+                fp_graphic_block, new_fp_idx = _extract_block(fp_block, fp_line_index)
+                fp_graphic_text = " ".join(s.strip() for s in fp_graphic_block)
+                start_match = START_RE.search(fp_graphic_text)
+                end_match = END_RE.search(fp_graphic_text)
+                if _is_front_silks_block(fp_graphic_text) and start_match and end_match:
+                    width_match = WIDTH_RE.search(fp_graphic_text)
+                    footprint_silkscreen_lines.append(
+                        {
+                            "start_mm": {"x": float(start_match.group(1)), "y": float(start_match.group(2))},
+                            "end_mm": {"x": float(end_match.group(1)), "y": float(end_match.group(2))},
+                            "stroke_width_mm": float(width_match.group(1)) if width_match else 0.15,
+                        }
+                    )
+                fp_line_index = new_fp_idx
+                continue
+
+            if FP_POLY_START_RE.match(fp_line):
+                fp_graphic_block, new_fp_idx = _extract_block(fp_block, fp_line_index)
+                fp_graphic_text = " ".join(s.strip() for s in fp_graphic_block)
+                if _is_front_silks_block(fp_graphic_text):
+                    points = [
+                        {"x": float(x), "y": float(y)}
+                        for x, y in XY_RE.findall(fp_graphic_text)
+                    ]
+                    if len(points) >= 3:
+                        footprint_silkscreen_polygons.append({"points_mm": points})
+                fp_line_index = new_fp_idx
+                continue
+
             fp_line_index += 1
+
+        footprint_at = footprint.get("at", [0.0, 0.0, 0.0])
+        fp_rot = float(footprint_at[2])
+        if _is_public_silkscreen_footprint(footprint):
+            for text_item in footprint_silkscreen_texts:
+                board_x, board_y = _transform_to_board_space(
+                    float(text_item["x_mm"]),
+                    float(text_item["y_mm"]),
+                    footprint_at,
+                )
+                silkscreen_texts.append(
+                    {
+                        **text_item,
+                        "x_mm": round(board_x, 6),
+                        "y_mm": round(board_y, 6),
+                        "rotation_deg": round(fp_rot + float(text_item.get("rotation_deg", 0.0)), 6),
+                    }
+                )
+
+            for line_item in footprint_silkscreen_lines:
+                start_x, start_y = _transform_to_board_space(
+                    float(line_item["start_mm"]["x"]),
+                    float(line_item["start_mm"]["y"]),
+                    footprint_at,
+                )
+                end_x, end_y = _transform_to_board_space(
+                    float(line_item["end_mm"]["x"]),
+                    float(line_item["end_mm"]["y"]),
+                    footprint_at,
+                )
+                silkscreen_lines.append(
+                    {
+                        "start_mm": {"x": round(start_x, 6), "y": round(start_y, 6)},
+                        "end_mm": {"x": round(end_x, 6), "y": round(end_y, 6)},
+                        "stroke_width_mm": line_item["stroke_width_mm"],
+                    }
+                )
+
+            for polygon_item in footprint_silkscreen_polygons:
+                transformed_points = []
+                for point in polygon_item["points_mm"]:
+                    point_x, point_y = _transform_to_board_space(
+                        float(point["x"]),
+                        float(point["y"]),
+                        footprint_at,
+                    )
+                    transformed_points.append({"x": round(point_x, 6), "y": round(point_y, 6)})
+                silkscreen_polygons.append({"points_mm": transformed_points})
 
         footprints.append(footprint)
 
@@ -357,6 +733,11 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
         "nets": [{"name": name} for name in sorted(nets)],
         "footprints": footprints,
         "board_outline": board_outline,
+        "silkscreen": {
+            "texts": silkscreen_texts,
+            "lines": silkscreen_lines,
+            "polygons": silkscreen_polygons,
+        },
     }
     return model
 
@@ -370,16 +751,25 @@ def write_board_model_json(model: dict, out_dir: Path) -> Path:
 
 
 def map_model_to_fritzing_connectors(model: dict) -> dict:
-    """Map parsed board model into a starter Fritzing connector model."""
+    """Map parsed board model into a starter Fritzing connector model.
+
+    Current behavior focuses on pin header footprints only. This keeps
+    generated parts aligned with common Fritzing wiring use-cases.
+    """
     connectors: list[dict] = []
 
     for footprint in model.get("footprints", []):
+        if not _is_pin_header_footprint(footprint):
+            continue
+
         reference = footprint.get("reference", "")
+        header_label = _choose_header_label(footprint)
         fp_at = footprint.get("at", [0.0, 0.0, 0.0])
         fp_x, fp_y, fp_rot = float(fp_at[0]), float(fp_at[1]), float(fp_at[2])
         for pad in footprint.get("pads", []):
             net_name = pad.get("net", "")
             pinfunction = pad.get("pinfunction", "")
+            clean_pinfunction = _normalize_pinfunction(pinfunction)
             pad_at = pad.get("at", [0.0, 0.0, 0.0])
             pad_x, pad_y = float(pad_at[0]), float(pad_at[1])
             rotated_x, rotated_y = _rotate_point(pad_x, pad_y, fp_rot)
@@ -388,15 +778,24 @@ def map_model_to_fritzing_connectors(model: dict) -> dict:
             )
             abs_x = fp_x + rotated_x
             abs_y = fp_y + rotated_y
+            pad_number = str(pad.get("pad", "")).strip()
+
+            connector_name = clean_pinfunction
+            if not connector_name and net_name and not net_name.startswith("Net-"):
+                connector_name = net_name
+            if not connector_name:
+                connector_name = f"{header_label}_{pad_number}" if pad_number else header_label
+
             connectors.append(
                 {
                     "id": f"{reference}_pad{pad.get('pad', '')}",
                     "footprint_reference": reference,
                     "footprint_name": footprint.get("footprint", ""),
                     "pad": pad.get("pad", ""),
-                    "name": pinfunction or net_name or f"{reference}_{pad.get('pad', '')}",
+                    "name": connector_name,
                     "net": net_name,
                     "pinfunction": pinfunction,
+                    "header_label": header_label,
                     "role": connector_role,
                     "position_mm": {
                         "x": round(abs_x, 6),
@@ -446,15 +845,16 @@ def build_fritzing_part_fzp(connector_model: dict) -> str:
     ET.SubElement(module, "properties")
 
     views = ET.SubElement(module, "views")
-    for view_name, layer_id, image_name in (
-        ("iconView", "icon", "icon.svg"),
-        ("breadboardView", "breadboard", "breadboard.svg"),
-        ("schematicView", "schematic", "schematic.svg"),
-        ("pcbView", "copper0", "pcb.svg"),
+    for view_name, layer_ids, image_name in (
+        ("iconView", ["icon"], VIEW_IMAGE_PATHS["icon"]),
+        ("breadboardView", ["breadboard"], VIEW_IMAGE_PATHS["breadboard"]),
+        ("schematicView", ["schematic"], VIEW_IMAGE_PATHS["schematic"]),
+        ("pcbView", ["copper0", "copper1"], VIEW_IMAGE_PATHS["pcb"]),
     ):
         view_elem = ET.SubElement(views, view_name)
         layers = ET.SubElement(view_elem, "layers", {"image": image_name})
-        ET.SubElement(layers, "layer", {"layerId": layer_id})
+        for layer_id in layer_ids:
+            ET.SubElement(layers, "layer", {"layerId": layer_id})
 
     connectors_elem = ET.SubElement(module, "connectors")
     for index, connector in enumerate(connector_model.get("connectors", [])):
@@ -479,12 +879,12 @@ def build_fritzing_part_fzp(connector_model: dict) -> str:
         for view_name, layer in (
             ("breadboardView", "breadboard"),
             ("schematicView", "schematic"),
-            ("pcbView", "copper0"),
+            ("pcbView", "copper1"),
         ):
             view_ref = ET.SubElement(connector_views, view_name)
             ET.SubElement(view_ref, "p", {"layer": layer, "svgId": svg_pin_id})
 
-    return ET.tostring(module, encoding="unicode")
+    return ET.tostring(module, encoding="unicode", xml_declaration=True)
 
 
 def write_fritzing_part_fzp(connector_model: dict, out_dir: Path) -> Path:
@@ -536,8 +936,7 @@ def _project_connector_positions(
     projected: list[tuple[float, float]] = []
     for x_mm, y_mm in points:
         x = margin + ((x_mm - min_x) * scale)
-        # Flip Y so larger KiCad Y appears lower on screen.
-        y = height - margin - ((y_mm - min_y) * scale)
+        y = margin + ((y_mm - min_y) * scale)
         projected.append((round(x, 3), round(y, 3)))
 
     return projected, (min_x, min_y, max_x, max_y), scale
@@ -555,7 +954,7 @@ def _project_outline_polygon(
     projected: list[tuple[float, float]] = []
     for pt in polygon_mm:
         x = margin + ((float(pt["x"]) - min_x) * scale)
-        y = height - margin - ((float(pt["y"]) - min_y) * scale)
+        y = margin + ((float(pt["y"]) - min_y) * scale)
         projected.append((round(x, 3), round(y, 3)))
     return projected
 
@@ -568,7 +967,7 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
 
     if view_name == "icon":
         width, height = 160, 100
-        projected, _, _ = _project_connector_positions(
+        projected, bounds, scale = _project_connector_positions(
             connector_model,
             width,
             height,
@@ -580,11 +979,13 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
             pins.append(
                 f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="3" fill="#455a64"/>'
             )
+        silkscreen_svg = _render_svg_silkscreen(board_model, bounds, width, height, 16, scale, "#37474f")
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
             f'viewBox="0 0 {width} {height}">'
             '<rect x="6" y="6" width="148" height="88" fill="#eceff1" '
             'stroke="#607d8b" stroke-width="2"/>'
+            + silkscreen_svg
             + "".join(pins)
             + '</svg>'
         )
@@ -602,24 +1003,22 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
             outline = _project_outline_polygon(polygons[0], bounds, width, height, 20, scale)
         else:
             outline = [(10.0, 150.0), (250.0, 150.0), (250.0, 10.0), (10.0, 10.0)]
+        width, height = _tight_canvas_size(outline + projected, (width, height), 20)
         outline_points = " ".join(f"{x},{y}" for x, y in outline)
         pins = []
-        labels = []
         for i, (x, y) in enumerate(projected):
             pins.append(
                 f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="5" '
                 'fill="#ffd54f" stroke="#8d6e63" stroke-width="1.2"/>'
             )
-            labels.append(
-                f'<text x="{x + 6}" y="{y - 6}" font-size="8" fill="#263238">{i}</text>'
-            )
+        silkscreen_svg = _render_svg_silkscreen(board_model, bounds, width, height, 20, scale, "#f5f5f5")
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
             f'viewBox="0 0 {width} {height}">'
             f'<polygon id="boardOutline" points="{outline_points}" fill="#90caf9" '
             'stroke="#1565c0" stroke-width="2"/>'
+            + silkscreen_svg
             + "".join(pins)
-            + "".join(labels)
             + '</svg>'
         )
 
@@ -667,22 +1066,32 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
         outline = _project_outline_polygon(polygons[0], bounds, width, height, 20, scale)
     else:
         outline = [(10.0, 150.0), (250.0, 150.0), (250.0, 10.0), (10.0, 10.0)]
+    width, height = _tight_canvas_size(outline + projected, (width, height), 20)
     outline_points = " ".join(f"{x},{y}" for x, y in outline)
-    pins = []
+    top_pins = []
+    bottom_pins = []
     for i, (x, y) in enumerate(projected):
-        pins.append(
+        pin_svg = (
             f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="4" fill="none" '
             'stroke="#ff9800" stroke-width="2"/>'
         )
+        top_pins.append(pin_svg)
+        bottom_pins.append(pin_svg)
+    silkscreen_svg = _render_svg_silkscreen(board_model, bounds, width, height, 20, scale, "#f5f5f5")
+
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">'
         '<g id="board">'
         f'<polygon id="boardOutline" points="{outline_points}" fill="#2e7d32" '
         'stroke="#1b5e20" stroke-width="2"/>'
-        '</g>'
+        + silkscreen_svg
+        + '</g>'
+        '<g id="copper1">'
+        + "".join(top_pins)
+        + '</g>'
         '<g id="copper0">'
-        + "".join(pins)
+        + "".join(bottom_pins)
         + '</g>'
         '</svg>'
     )
@@ -773,8 +1182,13 @@ def build_fritzing_package_zip(out_dir: Path) -> Path:
     if not fzp_file.exists():
         raise FileNotFoundError(f"Missing {fzp_file}")
     
-    required_svgs = ["icon.svg", "breadboard.svg", "schematic.svg", "pcb.svg"]
-    missing_svgs = [svg for svg in required_svgs if not (out_dir / svg).exists()]
+    required_svgs = {
+        "icon": "icon.svg",
+        "breadboard": "breadboard.svg",
+        "schematic": "schematic.svg",
+        "pcb": "pcb.svg",
+    }
+    missing_svgs = [svg for svg in required_svgs.values() if not (out_dir / svg).exists()]
     if missing_svgs:
         raise FileNotFoundError(f"Missing SVG files: {missing_svgs}")
     
@@ -782,14 +1196,15 @@ def build_fritzing_package_zip(out_dir: Path) -> Path:
     
     # Create ZIP archive with proper Fritzing package structure.
     with zipfile.ZipFile(package_path, "w", zipfile.ZIP_DEFLATED) as zf:
-        # Add .fzp file at archive root (not in a subdirectory).
-        zf.write(fzp_file, arcname="generated_part.fzp")
-        
-        # Add SVG files at archive root.
-        for svg in required_svgs:
-            svg_path = out_dir / svg
-            if svg_path.exists():
-                zf.write(svg_path, arcname=svg)
+        # Fritzing bundled-part loader expects these prefixes.
+        zf.write(fzp_file, arcname="part.generated_part.fzp")
+
+        # Flatten view paths (e.g. icon/icon.svg -> svg.icon.icon.svg).
+        for view_name, svg_file in required_svgs.items():
+            source_svg = out_dir / svg_file
+            image_path = VIEW_IMAGE_PATHS[view_name]
+            archive_name = f"svg.{image_path.replace('/', '.')}"
+            zf.write(source_svg, arcname=archive_name)
     
     return package_path
 

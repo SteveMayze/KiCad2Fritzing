@@ -31,11 +31,11 @@ def test_export_board_to_fritzing_stub_creates_readme(tmp_path: Path) -> None:
     # Verify it's a valid ZIP archive
     with zipfile.ZipFile(output_file) as zf:
         names = zf.namelist()
-        assert "generated_part.fzp" in names
-        assert "breadboard.svg" in names
-        assert "schematic.svg" in names
-        assert "pcb.svg" in names
-        assert "icon.svg" in names
+        assert "part.generated_part.fzp" in names
+        assert "svg.icon.icon.svg" in names
+        assert "svg.breadboard.breadboard.svg" in names
+        assert "svg.schematic.schematic.svg" in names
+        assert "svg.pcb.pcb.svg" in names
     
     # README.txt should still exist
     readme = out_dir / "README.txt"
@@ -101,6 +101,71 @@ def test_parse_kicad_board_to_model_on_basic_fixture() -> None:
     assert len(outline["polygons"][0]) == 4
 
 
+def test_parse_board_silkscreen_from_gr_text_and_footprint_poly(tmp_path: Path) -> None:
+    board_file = tmp_path / "silkscreen_board.kicad_pcb"
+    board_file.write_text(
+        """
+(kicad_pcb
+    (gr_rect (start 0 0) (end 20 10) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)) (fill none))
+    (gr_text "IN"
+        (at 5 5 0)
+        (layer "F.SilkS")
+        (effects (font (size 1.27 1.27) (thickness 0.15)))
+    )
+    (footprint "my:logo"
+        (layer "F.Cu")
+        (at 10 4 90)
+        (property "Reference" "LG1" (at 0 0 0) (layer "F.Fab"))
+        (property "Value" "logo" (at 0 0 0) (layer "F.Fab"))
+        (fp_poly
+            (pts (xy 0 0) (xy 2 0) (xy 2 1))
+            (stroke (width 0.01) (type solid))
+            (fill yes)
+            (layer "F.SilkS")
+        )
+    )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = parse_kicad_board_to_model(board_file)
+
+    assert model["silkscreen"]["texts"][0]["text"] == "IN"
+    polygon = model["silkscreen"]["polygons"][0]["points_mm"]
+    assert polygon == [
+        {"x": 10.0, "y": 4.0},
+        {"x": 10.0, "y": 6.0},
+        {"x": 9.0, "y": 6.0},
+    ]
+
+
+def test_component_footprint_silkscreen_is_not_exported(tmp_path: Path) -> None:
+    board_file = tmp_path / "component_silk.kicad_pcb"
+    board_file.write_text(
+        """
+(kicad_pcb
+    (gr_rect (start 0 0) (end 20 10) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)) (fill none))
+    (footprint "Device:R_0805"
+        (layer "F.Cu")
+        (at 10 5 0)
+        (property "Reference" "R1" (at 0 0 0) (layer "F.Fab"))
+        (property "Value" "10k" (at 0 0 0) (layer "F.Fab"))
+        (fp_line (start -1 0) (end 1 0) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+        (pad "1" smd rect (at -0.95 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+        (pad "2" smd rect (at 0.95 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+        )
+    )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = parse_kicad_board_to_model(board_file)
+
+    assert model["silkscreen"]["lines"] == []
+
+
 def test_export_board_to_fritzing_stub_creates_intermediate_model(tmp_path: Path) -> None:
     board_file = Path(
         "references/kicad-projects/basic-led-power/basic-led-power.kicad_pcb"
@@ -123,17 +188,18 @@ def test_map_model_to_fritzing_connectors_on_fixture() -> None:
 
     connector_model = map_model_to_fritzing_connectors(model)
 
-    assert connector_model["connector_count"] == 4
+    assert connector_model["connector_count"] == 2
     connector_by_id = {
         c["id"]: c for c in connector_model["connectors"]
     }
 
     assert connector_by_id["J1_pad1"]["net"] == "V+"
     assert connector_by_id["J1_pad2"]["net"] == "GND"
-    assert connector_by_id["D1_pad1"]["pinfunction"] == "K"
-    assert connector_by_id["D1_pad2"]["pinfunction"] == "A"
     assert connector_by_id["J1_pad1"]["position_mm"] == {"x": 120.0, "y": 100.0}
     assert connector_by_id["J1_pad2"]["position_mm"] == {"x": 120.0, "y": 102.54}
+    assert connector_by_id["J1_pad1"]["header_label"] == "J1"
+    assert connector_by_id["J1_pad1"]["name"] == "V+"
+    assert connector_by_id["J1_pad2"]["name"] == "GND"
 
     roles = {c["role"] for c in connector_model["connectors"]}
     assert roles == {"power"}
@@ -175,7 +241,7 @@ def test_export_board_to_fritzing_stub_creates_connector_model(tmp_path: Path) -
     assert connector_file.exists()
 
     connector_model = json.loads(connector_file.read_text(encoding="utf-8"))
-    assert connector_model["connector_count"] == 4
+    assert connector_model["connector_count"] == 2
 
 
 def test_build_fritzing_part_fzp_contains_expected_connectors() -> None:
@@ -265,7 +331,14 @@ def test_write_placeholder_svg_views(tmp_path: Path) -> None:
                 ]
             ],
             "bounds_mm": {"min_x": 0.0, "min_y": 0.0, "max_x": 40.0, "max_y": 20.0},
-        }
+        },
+        "silkscreen": {
+            "texts": [
+                {"text": "IN", "x_mm": 5.0, "y_mm": 6.0, "rotation_deg": 0.0, "size_mm": 1.27}
+            ],
+            "lines": [],
+            "polygons": [],
+        },
     }
 
     outputs = write_placeholder_svg_views(connector_model, tmp_path, board_model=board_model)
@@ -278,6 +351,38 @@ def test_write_placeholder_svg_views(tmp_path: Path) -> None:
     assert 'id="connector0pin"' in breadboard
     assert 'id="connector1pin"' in breadboard
     assert 'id="boardOutline"' in breadboard
+    assert '>IN<' in breadboard
+    assert 'x="47.5" y="53.0"' in breadboard
+
+
+def test_write_placeholder_svg_views_crops_square_board_width(tmp_path: Path) -> None:
+    connector_model = {
+        "source_board": "demo.kicad_pcb",
+        "connector_count": 1,
+        "connectors": [
+            {"id": "J1_pad1", "name": "Pin_1", "position_mm": {"x": 10.0, "y": 10.0}},
+        ],
+    }
+
+    board_model = {
+        "board_outline": {
+            "polygons": [
+                [
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 20.0, "y": 0.0},
+                    {"x": 20.0, "y": 20.0},
+                    {"x": 0.0, "y": 20.0},
+                ]
+            ],
+            "bounds_mm": {"min_x": 0.0, "min_y": 0.0, "max_x": 20.0, "max_y": 20.0},
+        },
+        "silkscreen": {"texts": [], "lines": [], "polygons": []},
+    }
+
+    write_placeholder_svg_views(connector_model, tmp_path, board_model=board_model)
+
+    breadboard = (tmp_path / "breadboard.svg").read_text(encoding="utf-8")
+    assert 'width="160" height="160"' in breadboard
 
 
 def test_validate_generated_artifacts_success(tmp_path: Path) -> None:
@@ -419,3 +524,33 @@ def test_parse_board_outline_from_edge_cuts_gr_arc(tmp_path: Path) -> None:
         assert outline["bounds_mm"]["min_x"] <= 0.0
         assert outline["bounds_mm"]["max_x"] >= 10.0
         assert outline["bounds_mm"]["max_y"] >= 5.0
+
+
+def test_pin_header_uses_silkscreen_user_label_for_fallback_name(tmp_path: Path) -> None:
+    board_file = tmp_path / "header_label.kicad_pcb"
+    board_file.write_text(
+        """
+(kicad_pcb
+  (footprint "Connector_PinHeader_2.54mm:PinHeader_1x02_P2.54mm_Vertical"
+    (layer "F.Cu")
+    (at 10 10 0)
+    (property "Reference" "P1" (at 0 -2 0) (layer "F.SilkS"))
+    (property "Value" "CONN_01X02" (at 0 2 0) (layer "F.Fab"))
+    (fp_text user "PWR" (at 0 -4 0) (layer "F.SilkS")
+      (effects (font (size 1 1) (thickness 0.15)))
+    )
+    (pad "1" thru_hole rect (at 0 0) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask"))
+    (pad "2" thru_hole oval (at 0 2.54) (size 1.5 1.5) (drill 0.8) (layers "*.Cu" "*.Mask"))
+  )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = parse_kicad_board_to_model(board_file)
+    connector_model = map_model_to_fritzing_connectors(model)
+
+    assert connector_model["connector_count"] == 2
+    assert connector_model["connectors"][0]["header_label"] == "PWR"
+    assert connector_model["connectors"][0]["name"] == "PWR_1"
+    assert connector_model["connectors"][1]["name"] == "PWR_2"

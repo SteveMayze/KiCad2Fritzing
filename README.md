@@ -11,6 +11,8 @@ Current status:
 - Initial KiCad Action Plugin skeleton exists.
 - Initial KiCad PCB parser extracts nets, footprints, and pads into an intermediate model.
 - Starter connector mapping generates a Fritzing-oriented connector model.
+- Connector extraction is currently focused on **pin header footprints** (first production-ready scope).
+- Connector labels currently prefer explicit pin/net names, then fall back to reference-based names like `P1_1`.
 - Minimal `.fzp` part generation is implemented from connector model data.
 - SVG view generation uses parsed connector coordinates from the board model.
 - Board outline is extracted from KiCad `Edge.Cuts` and used in generated SVG board shapes.
