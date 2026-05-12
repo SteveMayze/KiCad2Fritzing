@@ -135,6 +135,7 @@ dmypy.json
 
 .venv
 *.code-workspace
+.vscode/
 
 # KiCad local/project transient files (scoped to references/kicad-projects only)
 # Keep core sources tracked: *.kicad_pro, *.kicad_pcb, *.kicad_sch
