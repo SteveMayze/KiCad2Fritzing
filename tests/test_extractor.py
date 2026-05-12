@@ -24,14 +24,14 @@ def test_export_board_to_fritzing_stub_creates_readme(tmp_path: Path) -> None:
     out_dir = tmp_path / "result"
     output_file = export_board_to_fritzing_stub(board_file, out_dir)
 
-    # Now returns the .fzpz package file instead of README.txt
-    assert output_file == out_dir / "generated_part.fzpz"
+    # Now returns the board-named .fzpz package file instead of README.txt
+    assert output_file == out_dir / "demo.fzpz"
     assert output_file.exists()
     
     # Verify it's a valid ZIP archive
     with zipfile.ZipFile(output_file) as zf:
         names = zf.namelist()
-        assert "part.generated_part.fzp" in names
+        assert "part.demo.fzp" in names
         assert "svg.icon.icon.svg" in names
         assert "svg.breadboard.breadboard.svg" in names
         assert "svg.schematic.schematic.svg" in names
@@ -344,7 +344,7 @@ def test_write_fritzing_part_fzp(tmp_path: Path) -> None:
 
     assert output_file == tmp_path / "generated_part.fzp"
     content = output_file.read_text(encoding="utf-8")
-    assert "kicad2fritzing.generated.part" in content
+    assert "kicad2fritzing.generated_part" in content
     assert "Pin_1" in content
 
 
@@ -354,12 +354,22 @@ def test_export_board_to_fritzing_stub_creates_fzp_file(tmp_path: Path) -> None:
     )
     export_board_to_fritzing_stub(board_file, tmp_path)
 
-    part_file = tmp_path / "generated_part.fzp"
+    part_file = tmp_path / "basic-led-power.fzp"
     assert part_file.exists()
 
     content = part_file.read_text(encoding="utf-8")
     assert "<module" in content
     assert "<connectors>" in content
+
+
+def test_export_board_to_fritzing_stub_part_name_override(tmp_path: Path) -> None:
+    board_file = tmp_path / "demo-board.kicad_pcb"
+    board_file.write_text("(kicad_pcb)", encoding="utf-8")
+
+    output = export_board_to_fritzing_stub(board_file, tmp_path, part_name="My Custom Part")
+
+    assert output == tmp_path / "My_Custom_Part.fzpz"
+    assert (tmp_path / "My_Custom_Part.fzp").exists()
 
 
 def test_write_placeholder_svg_views(tmp_path: Path) -> None:

@@ -884,19 +884,27 @@ def write_fritzing_connector_model_json(connector_model: dict, out_dir: Path) ->
     return output_file
 
 
-def build_fritzing_part_fzp(connector_model: dict) -> str:
+def _sanitize_part_basename(name: str) -> str:
+    """Return a filesystem-safe Fritzing part basename."""
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", name).strip("._-")
+    return cleaned or "generated_part"
+
+
+def build_fritzing_part_fzp(connector_model: dict, part_basename: str = "generated_part") -> str:
     """Build a minimal Fritzing part XML document from connector model data."""
+    safe_basename = _sanitize_part_basename(part_basename)
+    part_title = safe_basename.replace("_", " ")
     module = ET.Element(
         "module",
         {
             "fritzingVersion": "0.9.3b",
-            "moduleId": "kicad2fritzing.generated.part",
+            "moduleId": f"kicad2fritzing.{safe_basename}",
         },
     )
     ET.SubElement(module, "version").text = "0.1"
     ET.SubElement(module, "author").text = "KiCad2Fritzing"
-    ET.SubElement(module, "title").text = "KiCad2Fritzing Generated Part"
-    ET.SubElement(module, "label").text = "KiCad2Fritzing Part"
+    ET.SubElement(module, "title").text = part_title
+    ET.SubElement(module, "label").text = part_title
     ET.SubElement(module, "date").text = "2026-05-10"
     ET.SubElement(module, "description").text = (
         "Auto-generated starter part from KiCad board connector model."
@@ -952,11 +960,16 @@ def build_fritzing_part_fzp(connector_model: dict) -> str:
     return ET.tostring(module, encoding="unicode", xml_declaration=True)
 
 
-def write_fritzing_part_fzp(connector_model: dict, out_dir: Path) -> Path:
+def write_fritzing_part_fzp(
+    connector_model: dict,
+    out_dir: Path,
+    part_basename: str = "generated_part",
+) -> Path:
     """Write a minimal generated Fritzing .fzp part file."""
     out_dir.mkdir(parents=True, exist_ok=True)
-    output_file = out_dir / "generated_part.fzp"
-    fzp_xml = build_fritzing_part_fzp(connector_model)
+    safe_basename = _sanitize_part_basename(part_basename)
+    output_file = out_dir / f"{safe_basename}.fzp"
+    fzp_xml = build_fritzing_part_fzp(connector_model, part_basename=safe_basename)
     output_file.write_text(fzp_xml, encoding="utf-8")
     return output_file
 
@@ -1186,11 +1199,17 @@ def write_placeholder_svg_views(
     return outputs
 
 
-def validate_generated_artifacts(connector_model: dict, out_dir: Path) -> dict:
+def validate_generated_artifacts(
+    connector_model: dict,
+    out_dir: Path,
+    part_basename: str = "generated_part",
+) -> dict:
     """Validate connector references across generated .fzp and SVG view files."""
+    safe_basename = _sanitize_part_basename(part_basename)
+    fzp_file = out_dir / f"{safe_basename}.fzp"
     expected = {f"connector{i}pin" for i in range(int(connector_model.get("connector_count", 0)))}
     required_files = [
-        out_dir / "generated_part.fzp",
+        fzp_file,
         out_dir / "breadboard.svg",
         out_dir / "schematic.svg",
         out_dir / "pcb.svg",
@@ -1198,8 +1217,8 @@ def validate_generated_artifacts(connector_model: dict, out_dir: Path) -> dict:
     missing_files = [str(p) for p in required_files if not p.exists()]
 
     fzp_ids: set[str] = set()
-    if (out_dir / "generated_part.fzp").exists():
-        fzp_text = (out_dir / "generated_part.fzp").read_text(encoding="utf-8")
+    if fzp_file.exists():
+        fzp_text = fzp_file.read_text(encoding="utf-8")
         fzp_ids = set(re.findall(r'svgId="([^"]+)"', fzp_text))
 
     svg_ids: set[str] = set()
@@ -1231,11 +1250,11 @@ def write_artifact_validation_report(report: dict, out_dir: Path) -> Path:
     return output_file
 
 
-def build_fritzing_package_zip(out_dir: Path) -> Path:
+def build_fritzing_package_zip(out_dir: Path, part_basename: str = "generated_part") -> Path:
     """Build a .fzpz (Fritzing shareable part) ZIP package from generated files.
     
     A .fzpz file is a ZIP archive containing:
-    - generated_part.fzp (part definition)
+    - <part_basename>.fzp (part definition)
     - SVG view files (breadboard.svg, schematic.svg, pcb.svg, icon.svg)
     
     Args:
@@ -1247,7 +1266,8 @@ def build_fritzing_package_zip(out_dir: Path) -> Path:
     Raises:
         FileNotFoundError: If required .fzp or SVG files are missing.
     """
-    fzp_file = out_dir / "generated_part.fzp"
+    safe_basename = _sanitize_part_basename(part_basename)
+    fzp_file = out_dir / f"{safe_basename}.fzp"
     if not fzp_file.exists():
         raise FileNotFoundError(f"Missing {fzp_file}")
     
@@ -1261,12 +1281,12 @@ def build_fritzing_package_zip(out_dir: Path) -> Path:
     if missing_svgs:
         raise FileNotFoundError(f"Missing SVG files: {missing_svgs}")
     
-    package_path = out_dir / "generated_part.fzpz"
+    package_path = out_dir / f"{safe_basename}.fzpz"
     
     # Create ZIP archive with proper Fritzing package structure.
     with zipfile.ZipFile(package_path, "w", zipfile.ZIP_DEFLATED) as zf:
         # Fritzing bundled-part loader expects these prefixes.
-        zf.write(fzp_file, arcname="part.generated_part.fzp")
+        zf.write(fzp_file, arcname=f"part.{safe_basename}.fzp")
 
         # Flatten view paths (e.g. icon/icon.svg -> svg.icon.icon.svg).
         for view_name, svg_file in required_svgs.items():
@@ -1278,37 +1298,43 @@ def build_fritzing_package_zip(out_dir: Path) -> Path:
     return package_path
 
 
-def export_board_to_fritzing_stub(board_file: Path, out_dir: Path) -> Path:
+def export_board_to_fritzing_stub(
+    board_file: Path,
+    out_dir: Path,
+    part_name: str | None = None,
+) -> Path:
     """Create a placeholder conversion output for initial project wiring.
     
     Generates:
     - board_model.json: Intermediate representation of KiCad board
     - fritzing_connectors.json: Connector and pin mapping
-    - generated_part.fzp: Fritzing part definition (XML)
+    - <board-name>.fzp: Fritzing part definition (XML)
     - SVG view files: breadboard, schematic, pcb, icon
-    - generated_part.fzpz: Packaged Fritzing shareable part (ZIP archive)
+    - <board-name>.fzpz: Packaged Fritzing shareable part (ZIP archive)
     - artifact_validation.json: Consistency checks
     
     Args:
         board_file: Path to .kicad_pcb file.
         out_dir: Output directory for generated files.
+        part_name: Optional override for generated part/package basename.
     
     Returns:
-        Path to generated_part.fzpz (Fritzing shareable part package).
+        Path to <board-name>.fzpz (Fritzing shareable part package).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
+    part_basename = _sanitize_part_basename(part_name or board_file.stem)
 
     model = parse_kicad_board_to_model(board_file)
     write_board_model_json(model, out_dir)
     connector_model = map_model_to_fritzing_connectors(model)
     write_fritzing_connector_model_json(connector_model, out_dir)
-    write_fritzing_part_fzp(connector_model, out_dir)
+    write_fritzing_part_fzp(connector_model, out_dir, part_basename=part_basename)
     write_placeholder_svg_views(connector_model, out_dir, board_model=model)
-    report = validate_generated_artifacts(connector_model, out_dir)
+    report = validate_generated_artifacts(connector_model, out_dir, part_basename=part_basename)
     write_artifact_validation_report(report, out_dir)
 
     # Build Fritzing shareable part package (.fzpz = ZIP archive).
-    package_path = build_fritzing_package_zip(out_dir)
+    package_path = build_fritzing_package_zip(out_dir, part_basename=part_basename)
 
     output_file = out_dir / "README.txt"
     output_file.write_text(
@@ -1318,15 +1344,15 @@ def export_board_to_fritzing_stub(board_file: Path, out_dir: Path) -> Path:
         "Generated files:\n"
         "  Intermediate model: board_model.json\n"
         "  Connector model: fritzing_connectors.json\n"
-        "  Fritzing part definition: generated_part.fzp\n"
+        f"  Fritzing part definition: {part_basename}.fzp\n"
         "  SVG views: icon.svg, breadboard.svg, schematic.svg, pcb.svg\n"
-        "  Fritzing shareable part: generated_part.fzpz (ready to import)\n"
+        f"  Fritzing shareable part: {part_basename}.fzpz (ready to import)\n"
         "  Validation report: artifact_validation.json\n"
         "\n"
         "To import into Fritzing:\n"
         "  1. Open Fritzing\n"
         "  2. Right-click in the 'Mine' bin → Import...\n"
-        "  3. Select generated_part.fzpz\n"
+        f"  3. Select {part_basename}.fzpz\n"
         "\n"
         "Next step: refine SVG geometry from real board footprint data.\n",
         encoding="utf-8",

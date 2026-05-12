@@ -50,12 +50,19 @@ pip install -e "src[dev]"
 kicad2fritzing path/to/board.kicad_pcb --out-dir build/fritzing-part
 ```
 
+Override the default board-derived part/package name:
+
+```bash
+kicad2fritzing path/to/board.kicad_pcb --out-dir build/fritzing-part --part-name my-custom-part
+```
+
 For now, this creates placeholder output to validate project wiring and flow.
 It also writes an intermediate model file: `board_model.json`.
 It now also writes a connector model file: `fritzing_connectors.json`.
-It also writes a starter Fritzing part file: `generated_part.fzp`.
+It also writes a starter Fritzing part file named after the board, e.g. `my-board.fzp`.
 It also writes placeholder SVG view files: `icon.svg`, `breadboard.svg`, `schematic.svg`, `pcb.svg`.
 It writes a validation report: `artifact_validation.json`.
+It writes a shareable package named after the board, e.g. `my-board.fzpz`.
 
 ## KiCad Extension Direction
 

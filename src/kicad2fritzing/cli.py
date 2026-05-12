@@ -22,6 +22,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Output folder for generated Fritzing artifacts",
     )
     parser.add_argument(
+        "--part-name",
+        type=str,
+        default=None,
+        help="Optional output part base name (defaults to board filename)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -38,7 +44,11 @@ def main() -> int:
         format="%(levelname)s: %(message)s",
     )
 
-    output_file = export_board_to_fritzing_stub(args.board_file, args.out_dir)
+    output_file = export_board_to_fritzing_stub(
+        args.board_file,
+        args.out_dir,
+        part_name=args.part_name,
+    )
     logging.info("Wrote placeholder output: %s", output_file)
     return 0
 
