@@ -1,0 +1,12 @@
+{
+  "projects": [
+    {
+      "name": "Example project",
+      "repo_url": "git@github.com:owner/repo.git",
+      "branch": "main",
+      "enabled": true,
+      "repo_subdir": "",
+      "board_rel_path": ""
+    }
+  ]
+}

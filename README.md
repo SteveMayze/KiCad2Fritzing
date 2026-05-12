@@ -105,3 +105,36 @@ Current tests cover:
 - Minimal `.fzp` generation from connector model.
 - Placeholder SVG generation and connector ID consistency validation.
 - CLI argument parsing and output generation flow.
+
+Optional external-project integration test (disabled by default):
+
+This test can clone a KiCad project repo at test time, parse it, and validate generated artifacts without storing the project in this repository.
+
+The test reads a local secret config at [tests/external_projects.local.json](tests/external_projects.local.json) and runs one case per enabled entry. Add or remove projects there, or point `K2F_EXTERNAL_PROJECTS_CONFIG` at another JSON file with the same shape.
+
+A public sample is provided at [tests/external_projects.sample.json](tests/external_projects.sample.json). Copy it to `tests/external_projects.local.json` and edit it for your own projects.
+
+Each project entry supports:
+- `name` for the pytest test id.
+- `repo_url` for the Git URL.
+- `branch` for the target branch.
+- `enabled` to temporarily disable an entry without deleting it.
+- `repo_subdir` and `board_rel_path` for projects that keep the KiCad board in a subfolder or specific file.
+
+Example with LoudMouth `k10_update`:
+
+```bash
+. .venv/bin/activate
+RUN_EXTERNAL_PROJECT_TESTS=1 \
+pytest tests/test_external_projects.py -q
+```
+
+Useful optional variables:
+- `K2F_EXTERNAL_PROJECTS_CONFIG` to use a different JSON config file.
+- `K2F_EXTERNAL_REPO_URL` and `K2F_EXTERNAL_REPO_BRANCH` to override the config for a one-off run.
+- `K2F_EXTERNAL_REPO_SUBDIR` to limit search to a folder inside the cloned repo.
+- `K2F_EXTERNAL_BOARD_PATH` to target a specific `.kicad_pcb` file relative to that folder.
+
+Rendering tuning:
+- `K2F_SILK_TEXT_SCALE` adjusts silkscreen text size in generated SVGs (default `1.15`).
+	Example: `K2F_SILK_TEXT_SCALE=1.22` for slightly larger board labels.

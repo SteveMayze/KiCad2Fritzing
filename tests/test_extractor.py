@@ -135,8 +135,8 @@ def test_parse_board_silkscreen_from_gr_text_and_footprint_poly(tmp_path: Path) 
     polygon = model["silkscreen"]["polygons"][0]["points_mm"]
     assert polygon == [
         {"x": 10.0, "y": 4.0},
-        {"x": 10.0, "y": 6.0},
-        {"x": 9.0, "y": 6.0},
+        {"x": 10.0, "y": 2.0},
+        {"x": 11.0, "y": 2.0},
     ]
 
 
@@ -203,6 +203,58 @@ def test_map_model_to_fritzing_connectors_on_fixture() -> None:
 
     roles = {c["role"] for c in connector_model["connectors"]}
     assert roles == {"power"}
+
+
+def test_map_model_to_fritzing_connectors_includes_custom_j_reference_connectors() -> None:
+    model = {
+        "source_board": "demo.kicad_pcb",
+        "footprints": [
+            {
+                "reference": "J4",
+                "value": "A_INA219",
+                "footprint": "lps-1-Footprints:Adafruit-INA219_2xM2.5",
+                "at": [10.0, 20.0, 0.0],
+                "silkscreen_user_labels": [],
+                "pads": [
+                    {"pad": "1", "net": "GND", "pinfunction": "", "at": [0.0, 0.0, 0.0]},
+                    {"pad": "2", "net": "VCC", "pinfunction": "", "at": [2.54, 0.0, 0.0]},
+                ],
+            }
+        ],
+    }
+
+    connector_model = map_model_to_fritzing_connectors(model)
+
+    assert connector_model["connector_count"] == 2
+    ids = {c["id"] for c in connector_model["connectors"]}
+    assert ids == {"J4_pad1", "J4_pad2"}
+
+
+def test_parse_gr_text_preserves_justify_alignment(tmp_path: Path) -> None:
+    board_file = tmp_path / "silk_justify.kicad_pcb"
+    board_file.write_text(
+        """
+(kicad_pcb
+    (gr_rect (start 0 0) (end 20 10) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)) (fill none))
+    (gr_text "Vcc"
+        (at 12 7 0)
+        (layer "F.SilkS")
+        (effects
+            (font (size 0.762 1.016) (thickness 0.1524) (bold yes))
+            (justify right bottom)
+        )
+    )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = parse_kicad_board_to_model(board_file)
+    text_item = model["silkscreen"]["texts"][0]
+
+    assert text_item["text"] == "Vcc"
+    assert text_item["h_align"] == "right"
+    assert text_item["v_align"] == "bottom"
 
 
 def test_write_fritzing_connector_model_json(tmp_path: Path) -> None:

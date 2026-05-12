@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 import re
 import zipfile
 from xml.etree import ElementTree as ET
@@ -35,6 +36,7 @@ LAYER_RE = re.compile(r'\(layer\s+"([^"]+)"\)')
 SIZE_RE = re.compile(r'\(size\s+([-\d.]+)\s+([-\d.]+)\)')
 WIDTH_RE = re.compile(r'\(width\s+([-\d.]+)\)')
 THICKNESS_RE = re.compile(r'\(thickness\s+([-\d.]+)\)')
+JUSTIFY_RE = re.compile(r'\(justify\s+([^\)]+)\)')
 HIDE_RE = re.compile(r'\(hide\s+yes\)')
 POWER_NET_HINTS = {"V+", "VCC", "VIN", "5V", "3V3", "3.3V", "GND"}
 POWER_NET_HINTS_UPPER = {n.upper() for n in POWER_NET_HINTS}
@@ -45,6 +47,7 @@ VIEW_IMAGE_PATHS = {
     "pcb": "pcb/pcb.svg",
 }
 GENERIC_PINFUNCTION_RE = re.compile(r"^pin[_\s-]*\d+$", re.IGNORECASE)
+SILK_TEXT_SIZE_MULTIPLIER = float(os.getenv("K2F_SILK_TEXT_SCALE", "1.15"))
 
 
 def _rotate_point(x: float, y: float, angle_deg: float) -> tuple[float, float]:
@@ -93,7 +96,8 @@ def _transform_to_board_space(
     fp_x = float(footprint_at[0])
     fp_y = float(footprint_at[1])
     fp_rot = float(footprint_at[2])
-    rotated_x, rotated_y = _rotate_point(x, y, fp_rot)
+    # KiCad footprint-local coordinates map correctly here with inverse sign.
+    rotated_x, rotated_y = _rotate_point(x, y, -fp_rot)
     return fp_x + rotated_x, fp_y + rotated_y
 
 
@@ -103,6 +107,28 @@ def _text_style_from_block(block_text: str) -> tuple[float, float]:
     size_y = float(size_match.group(2)) if size_match else 1.0
     thickness = float(thickness_match.group(1)) if thickness_match else 0.15
     return size_y, thickness
+
+
+def _text_justify_from_block(block_text: str) -> tuple[str, str]:
+    justify_match = JUSTIFY_RE.search(block_text)
+    if not justify_match:
+        return "center", "middle"
+
+    tokens = {token.strip().lower() for token in justify_match.group(1).split() if token.strip()}
+    h_align = "center"
+    v_align = "middle"
+
+    if "left" in tokens:
+        h_align = "left"
+    elif "right" in tokens:
+        h_align = "right"
+
+    if "top" in tokens:
+        v_align = "top"
+    elif "bottom" in tokens:
+        v_align = "bottom"
+
+    return h_align, v_align
 
 
 def _project_mm_to_svg(
@@ -169,19 +195,35 @@ def _render_svg_silkscreen(
             margin,
             scale,
         )
-        font_size = max(3.0, round(float(text_item.get("size_mm", 1.0)) * scale, 3))
+        font_size = max(
+            3.0,
+            round(float(text_item.get("size_mm", 1.0)) * scale * SILK_TEXT_SIZE_MULTIPLIER, 3),
+        )
         angle = -float(text_item.get("rotation_deg", 0.0))
+        h_align = str(text_item.get("h_align", "center"))
+        v_align = str(text_item.get("v_align", "middle"))
+        text_anchor = {"left": "start", "center": "middle", "right": "end"}.get(h_align, "middle")
+        dominant_baseline = {
+            "top": "hanging",
+            "middle": "middle",
+            "bottom": "alphabetic",
+        }.get(v_align, "middle")
         transform = f' transform="rotate({round(angle, 3)} {x} {y})"' if angle else ""
         lines = raw_text.splitlines() or [raw_text]
         line_step = round(font_size * 1.15, 3)
-        first_dy = round(-((len(lines) - 1) * line_step) / 2, 3)
+        if v_align == "top":
+            first_dy = 0.0
+        elif v_align == "bottom":
+            first_dy = round(-((len(lines) - 1) * line_step), 3)
+        else:
+            first_dy = round(-((len(lines) - 1) * line_step) / 2, 3)
         tspans: list[str] = []
         for idx, line_text in enumerate(lines):
             dy = first_dy if idx == 0 else line_step
             tspans.append(f'<tspan x="{x}" dy="{dy}">{escape(line_text)}</tspan>')
         parts.append(
             f'<text x="{x}" y="{y}" font-size="{font_size}" font-family="sans-serif" '
-            f'fill="{color}" text-anchor="middle" dominant-baseline="middle" opacity="0.96"{transform}>'
+            f'fill="{color}" text-anchor="{text_anchor}" dominant-baseline="{dominant_baseline}" opacity="0.96"{transform}>'
             + "".join(tspans)
             + '</text>'
         )
@@ -303,8 +345,20 @@ def _build_polygon_from_segments(
 def _is_pin_header_footprint(footprint: dict) -> bool:
     footprint_name = str(footprint.get("footprint", "")).lower()
     value = str(footprint.get("value", "")).lower()
+    reference = str(footprint.get("reference", "")).strip().upper()
+    pad_count = len(footprint.get("pads", []))
 
     if "pinheader" in footprint_name or "pin_header" in footprint_name:
+        return True
+
+    if "pinsocket" in footprint_name or "pin_socket" in footprint_name:
+        return True
+
+    if "connector" in footprint_name and pad_count >= 2:
+        return True
+
+    # Many projects use custom connector footprints with J* references.
+    if reference.startswith("J") and pad_count >= 2:
         return True
 
     # Common legacy naming when symbol/footprint text doesn't include "PinHeader".
@@ -367,6 +421,11 @@ def _tight_canvas_size(
     width = max(int(math.ceil(max_x + padding)), 2 * padding)
     height = max(int(math.ceil(max_y + padding)), 2 * padding)
     return width, height
+
+
+def _scaled_pad_radius(scale: float, min_radius: float = 1.6, max_radius: float = 3.8) -> float:
+    # Through-hole annulus is roughly 1.8-2.0 mm on many boards; keep a sane screen clamp.
+    return round(max(min_radius, min(max_radius, 0.95 * scale)), 3)
 
 
 def parse_kicad_board_to_model(board_file: Path) -> dict:
@@ -443,6 +502,7 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
             at_match = AT_ANY_RE.search(gr_text)
             if text_match and at_match and _is_front_silks_block(gr_text) and not HIDE_RE.search(gr_text):
                 size_y, thickness = _text_style_from_block(gr_text)
+                h_align, v_align = _text_justify_from_block(gr_text)
                 silkscreen_texts.append(
                     {
                         "text": _decode_kicad_text(text_match.group(1)),
@@ -451,6 +511,8 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
                         "rotation_deg": float(at_match.group(3) or 0.0),
                         "size_mm": size_y,
                         "thickness_mm": thickness,
+                        "h_align": h_align,
+                        "v_align": v_align,
                     }
                 )
             continue
@@ -571,6 +633,7 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
                     at_match = AT_ANY_RE.search(fp_text_all)
                     if at_match:
                         size_y, thickness = _text_style_from_block(fp_text_all)
+                        h_align, v_align = _text_justify_from_block(fp_text_all)
                         footprint_silkscreen_texts.append(
                             {
                                 "text": fp_text_value,
@@ -579,6 +642,8 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
                                 "rotation_deg": float(at_match.group(3) or 0.0),
                                 "size_mm": size_y,
                                 "thickness_mm": thickness,
+                                "h_align": h_align,
+                                "v_align": v_align,
                             }
                         )
                 fp_line_index = new_fp_idx
@@ -772,7 +837,7 @@ def map_model_to_fritzing_connectors(model: dict) -> dict:
             clean_pinfunction = _normalize_pinfunction(pinfunction)
             pad_at = pad.get("at", [0.0, 0.0, 0.0])
             pad_x, pad_y = float(pad_at[0]), float(pad_at[1])
-            rotated_x, rotated_y = _rotate_point(pad_x, pad_y, fp_rot)
+            rotated_x, rotated_y = _rotate_point(pad_x, pad_y, -fp_rot)
             connector_role = (
                 "power" if net_name.upper() in POWER_NET_HINTS_UPPER else "signal"
             )
@@ -1003,20 +1068,22 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
             outline = _project_outline_polygon(polygons[0], bounds, width, height, 20, scale)
         else:
             outline = [(10.0, 150.0), (250.0, 150.0), (250.0, 10.0), (10.0, 10.0)]
-        width, height = _tight_canvas_size(outline + projected, (width, height), 20)
+        width, height = _tight_canvas_size(outline, (width, height), 20)
         outline_points = " ".join(f"{x},{y}" for x, y in outline)
+        pad_radius = _scaled_pad_radius(scale)
+        pad_stroke = round(max(0.7, pad_radius * 0.34), 3)
         pins = []
         for i, (x, y) in enumerate(projected):
             pins.append(
-                f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="5" '
-                'fill="#ffd54f" stroke="#8d6e63" stroke-width="1.2"/>'
+                f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="{pad_radius}" '
+                f'fill="#ffb300" stroke="#d84315" stroke-width="{pad_stroke}"/>'
             )
         silkscreen_svg = _render_svg_silkscreen(board_model, bounds, width, height, 20, scale, "#f5f5f5")
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
             f'viewBox="0 0 {width} {height}">'
-            f'<polygon id="boardOutline" points="{outline_points}" fill="#90caf9" '
-            'stroke="#1565c0" stroke-width="2"/>'
+            f'<polygon id="boardOutline" points="{outline_points}" fill="#2b5f82" '
+            'stroke="#0f4c81" stroke-width="2"/>'
             + silkscreen_svg
             + "".join(pins)
             + '</svg>'
@@ -1066,14 +1133,16 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
         outline = _project_outline_polygon(polygons[0], bounds, width, height, 20, scale)
     else:
         outline = [(10.0, 150.0), (250.0, 150.0), (250.0, 10.0), (10.0, 10.0)]
-    width, height = _tight_canvas_size(outline + projected, (width, height), 20)
+    width, height = _tight_canvas_size(outline, (width, height), 20)
     outline_points = " ".join(f"{x},{y}" for x, y in outline)
+    pad_radius = _scaled_pad_radius(scale, min_radius=1.2, max_radius=3.2)
+    pad_stroke = round(max(0.8, pad_radius * 0.5), 3)
     top_pins = []
     bottom_pins = []
     for i, (x, y) in enumerate(projected):
         pin_svg = (
-            f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="4" fill="none" '
-            'stroke="#ff9800" stroke-width="2"/>'
+            f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="{pad_radius}" fill="none" '
+            f'stroke="#ff9800" stroke-width="{pad_stroke}"/>'
         )
         top_pins.append(pin_svg)
         bottom_pins.append(pin_svg)
