@@ -286,15 +286,6 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         dir_sizer.Add(self.open_dir_btn, 0)
         sizer.Add(dir_sizer, 0, wx.ALL | wx.EXPAND, 10)
         
-        # Text Scaling
-        scale_label = wx.StaticText(panel, label="Text Scaling:")
-        self.scale_label = scale_label
-        self.scale_input = wx.TextCtrl(panel, value="1.15", size=(400, -1))
-        scale_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        scale_sizer.Add(scale_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
-        scale_sizer.Add(self.scale_input, 1, wx.EXPAND)
-        sizer.Add(scale_sizer, 0, wx.ALL | wx.EXPAND, 10)
-
         # KiCad-native silkscreen toggle (default on for alpha/beta diagnostics)
         self.use_kicad_native_overlay = wx.CheckBox(
             panel,
@@ -304,15 +295,24 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         self.use_kicad_native_overlay.Bind(wx.EVT_CHECKBOX, self._on_native_overlay_toggle)
         sizer.Add(self.use_kicad_native_overlay, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
+        # Text Scaling
+        scale_label = wx.StaticText(panel, label="Text Scaling:")
+        self.scale_label = scale_label
+        self.scale_input = wx.TextCtrl(panel, value="1.15", size=(400, -1))
+        scale_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        scale_sizer.Add(scale_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        scale_sizer.Add(self.scale_input, 1, wx.EXPAND)
+        sizer.Add(scale_sizer, 0, wx.ALL | wx.EXPAND, 10)
+
         # Native overlay bypasses custom text scaling; disable to avoid confusion.
         self._sync_text_scaling_controls()
         
         # Buttons
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        close_btn = wx.Button(panel, wx.ID_CANCEL, "Close")
         generate_btn = wx.Button(panel, wx.ID_OK, "Generate")
-        cancel_btn = wx.Button(panel, wx.ID_CANCEL, "Cancel")
-        btn_sizer.Add(generate_btn, 0, wx.RIGHT, 10)
-        btn_sizer.Add(cancel_btn, 0)
+        btn_sizer.Add(close_btn, 0, wx.RIGHT, 10)
+        btn_sizer.Add(generate_btn, 0)
         sizer.Add(btn_sizer, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
         
         panel.SetSizer(sizer)
