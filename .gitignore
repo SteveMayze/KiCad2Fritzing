@@ -149,3 +149,8 @@ references/kicad-projects/**/*-backups/
 references/kicad-projects/**/fp-info-cache
 references/kicad-projects/Quick_5v/
 tests/external_projects.local.json
+
+
+sample-screenshots/
+*/.DS_Store
+
