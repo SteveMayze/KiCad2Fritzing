@@ -166,6 +166,32 @@ def test_component_footprint_silkscreen_is_not_exported(tmp_path: Path) -> None:
     assert model["silkscreen"]["lines"] == []
 
 
+def test_component_footprint_silkscreen_is_exported_when_option_enabled(tmp_path: Path) -> None:
+    board_file = tmp_path / "component_silk.kicad_pcb"
+    board_file.write_text(
+        """
+(kicad_pcb
+    (gr_rect (start 0 0) (end 20 10) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)) (fill none))
+    (footprint "Device:R_0805"
+        (layer "F.Cu")
+        (at 10 5 0)
+        (property "Reference" "R1" (at 0 0 0) (layer "F.Fab"))
+        (property "Value" "10k" (at 0 0 0) (layer "F.Fab"))
+        (fp_line (start -1 0) (end 1 0) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+        (pad "1" smd rect (at -0.95 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+        (pad "2" smd rect (at 0.95 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+        )
+    )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = parse_kicad_board_to_model(board_file, include_component_silkscreen=True)
+
+    assert len(model["silkscreen"]["lines"]) > 0
+
+
 def test_export_board_to_fritzing_stub_creates_intermediate_model(tmp_path: Path) -> None:
     board_file = Path(
         "references/kicad-projects/basic-led-power/basic-led-power.kicad_pcb"

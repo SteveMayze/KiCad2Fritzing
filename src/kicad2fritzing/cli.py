@@ -28,6 +28,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Optional output part base name (defaults to board filename)",
     )
     parser.add_argument(
+        "--include-component-silkscreen",
+        action="store_true",
+        help="Include component footprint silkscreen (outlines and labels) in generated SVG views",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -48,6 +53,7 @@ def main() -> int:
         args.board_file,
         args.out_dir,
         part_name=args.part_name,
+        render_options={"include_component_silkscreen": args.include_component_silkscreen},
     )
     logging.info("Wrote placeholder output: %s", output_file)
     return 0

@@ -54,6 +54,7 @@ DEFAULT_RENDER_OPTIONS = {
     "silkscreen_color": "#f5f5f5",
     "pad_scale": 1.0,
     "silk_text_scale": 1.15,
+    "include_component_silkscreen": False,
 }
 
 
@@ -67,6 +68,12 @@ def _resolve_render_options(render_options: dict | None) -> dict:
         options["silk_text_scale"] = float(
             os.getenv("K2F_SILK_TEXT_SCALE", str(DEFAULT_RENDER_OPTIONS["silk_text_scale"]))
         )
+
+    include_comp_silk = options.get("include_component_silkscreen")
+    if isinstance(include_comp_silk, str):
+        options["include_component_silkscreen"] = include_comp_silk.lower() in ("true", "1", "yes")
+    else:
+        options["include_component_silkscreen"] = bool(include_comp_silk)
 
     def _sanitize_color(value: object, fallback: str) -> str:
         if isinstance(value, str):
@@ -461,8 +468,16 @@ def _choose_header_label(footprint: dict) -> str:
     return "HEADER"
 
 
-def _is_public_silkscreen_footprint(footprint: dict) -> bool:
-    return not bool(footprint.get("pads"))
+def _is_public_silkscreen_footprint(footprint: dict, include_component_silkscreen: bool = False) -> bool:
+    """Return True if footprint silkscreen should be included in board silkscreen.
+    
+    By default, only include silkscreen from non-component footprints (e.g., logos, labels).
+    When include_component_silkscreen is True, also include component outlines and labels.
+    """
+    has_pads = bool(footprint.get("pads"))
+    if has_pads:
+        return include_component_silkscreen
+    return True
 
 
 def _tight_canvas_size(
@@ -492,7 +507,7 @@ def _scaled_pad_radius(
     return round(max(0.4, min(max_radius * 2.0, adjusted)), 3)
 
 
-def parse_kicad_board_to_model(board_file: Path) -> dict:
+def parse_kicad_board_to_model(board_file: Path, include_component_silkscreen: bool = False) -> dict:
     """Parse a KiCad PCB file into a small intermediate model for conversion."""
     text = board_file.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -782,7 +797,7 @@ def parse_kicad_board_to_model(board_file: Path) -> dict:
 
         footprint_at = footprint.get("at", [0.0, 0.0, 0.0])
         fp_rot = float(footprint_at[2])
-        if _is_public_silkscreen_footprint(footprint):
+        if _is_public_silkscreen_footprint(footprint, include_component_silkscreen):
             for text_item in footprint_silkscreen_texts:
                 board_x, board_y = _transform_to_board_space(
                     float(text_item["x_mm"]),
@@ -1453,8 +1468,10 @@ def export_board_to_fritzing_stub(
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     part_basename = _sanitize_part_basename(part_name or board_file.stem)
+    resolved_options = _resolve_render_options(render_options)
+    include_comp_silk = resolved_options.get("include_component_silkscreen", False)
 
-    model = parse_kicad_board_to_model(board_file)
+    model = parse_kicad_board_to_model(board_file, include_component_silkscreen=include_comp_silk)
     write_board_model_json(model, out_dir)
     connector_model = map_model_to_fritzing_connectors(model)
     write_fritzing_connector_model_json(connector_model, out_dir)
