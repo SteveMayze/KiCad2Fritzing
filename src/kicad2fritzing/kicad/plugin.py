@@ -21,6 +21,7 @@ except ImportError:  # pragma: no cover
 
 SVG_NS = "http://www.w3.org/2000/svg"
 NUMERIC_PREFIX_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
 def _parse_svg_number(value: str | None) -> float | None:
@@ -240,6 +241,13 @@ def write_overlay_mode_marker(
     return marker_path
 
 
+def _normalize_hex_color(value: str, fallback: str) -> str:
+    text = value.strip()
+    if HEX_COLOR_RE.fullmatch(text):
+        return text.lower()
+    return fallback
+
+
 class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
     """Dialog for KiCad to Fritzing part generation settings."""
 
@@ -248,25 +256,13 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         if wx is None:
             raise RuntimeError("wxPython not available")
         
-        wx.Dialog.__init__(self, parent, title="KiCad to Fritzing Part Generation", size=(720, 360))
+        wx.Dialog.__init__(self, parent, title="KiCad to Fritzing Part Generation", size=(720, 430))
         self.board_path = board_path
         self.project_dir = board_path.parent.resolve()
         
         # Panel setup
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
-        
-        # Part Name
-        part_label = wx.StaticText(panel, label="Part Name:")
-        self.part_name_input = wx.TextCtrl(
-            panel,
-            value=board_path.stem,
-            size=(400, -1)
-        )
-        part_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        part_sizer.Add(part_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
-        part_sizer.Add(self.part_name_input, 1, wx.EXPAND)
-        sizer.Add(part_sizer, 0, wx.ALL | wx.EXPAND, 10)
         
         # Directory
         dir_label = wx.StaticText(panel, label="Output Directory:")
@@ -285,6 +281,38 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         dir_sizer.Add(self.browse_btn, 0, wx.RIGHT, 5)
         dir_sizer.Add(self.open_dir_btn, 0)
         sizer.Add(dir_sizer, 0, wx.ALL | wx.EXPAND, 10)
+
+        # Part Name
+        part_label = wx.StaticText(panel, label="Part Name:")
+        self.part_name_input = wx.TextCtrl(
+            panel,
+            value=board_path.stem,
+            size=(400, -1)
+        )
+        part_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        part_sizer.Add(part_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        part_sizer.Add(self.part_name_input, 1, wx.EXPAND)
+        sizer.Add(part_sizer, 0, wx.ALL | wx.EXPAND, 10)
+
+        # Render colors
+        color_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        soldermask_label = wx.StaticText(panel, label="Soldermask color:")
+        self.soldermask_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#2b5f82"))
+        self.silkscreen_color_label = wx.StaticText(panel, label="Silkscreen color:")
+        self.silkscreen_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#f5f5f5"))
+        color_sizer.Add(soldermask_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        color_sizer.Add(self.soldermask_color_input, 0, wx.RIGHT, 22)
+        color_sizer.Add(self.silkscreen_color_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        color_sizer.Add(self.silkscreen_color_input, 0)
+        sizer.Add(color_sizer, 0, wx.ALL, 10)
+
+        # Pad/Pin scaling
+        pad_scale_label = wx.StaticText(panel, label="Pad/Pin Scaling:")
+        self.pad_scale_input = wx.TextCtrl(panel, value="1.0", size=(120, -1))
+        pad_scale_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        pad_scale_sizer.Add(pad_scale_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        pad_scale_sizer.Add(self.pad_scale_input, 0)
+        sizer.Add(pad_scale_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         
         # KiCad-native silkscreen toggle (default on for alpha/beta diagnostics)
         self.use_kicad_native_overlay = wx.CheckBox(
@@ -296,13 +324,19 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         sizer.Add(self.use_kicad_native_overlay, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         # Text Scaling
-        scale_label = wx.StaticText(panel, label="Text Scaling:")
+        scale_label = wx.StaticText(panel, label="Text scaling (custom renderer only):")
         self.scale_label = scale_label
         self.scale_input = wx.TextCtrl(panel, value="1.15", size=(400, -1))
         scale_sizer = wx.BoxSizer(wx.HORIZONTAL)
         scale_sizer.Add(scale_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
         scale_sizer.Add(self.scale_input, 1, wx.EXPAND)
         sizer.Add(scale_sizer, 0, wx.ALL | wx.EXPAND, 10)
+
+        self.custom_options_hint = wx.StaticText(
+            panel,
+            label="Silkscreen color and text scaling apply only to custom silkscreen rendering.",
+        )
+        sizer.Add(self.custom_options_hint, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
         # Native overlay bypasses custom text scaling; disable to avoid confusion.
         self._sync_text_scaling_controls()
@@ -385,26 +419,48 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             )
 
     def _sync_text_scaling_controls(self) -> None:
-        """Enable text-scaling input only for custom silkscreen rendering."""
-        enable_scale_controls = not bool(self.use_kicad_native_overlay.GetValue())
-        self.scale_input.Enable(enable_scale_controls)
-        self.scale_label.Enable(enable_scale_controls)
+        """Enable custom silkscreen controls only when native overlay is disabled."""
+        enable_custom_controls = not bool(self.use_kicad_native_overlay.GetValue())
+        self.scale_input.Enable(enable_custom_controls)
+        self.scale_label.Enable(enable_custom_controls)
+        self.silkscreen_color_input.Enable(enable_custom_controls)
+        self.silkscreen_color_label.Enable(enable_custom_controls)
 
     def _on_native_overlay_toggle(self, event) -> None:
         """Update control state when native-overlay checkbox changes."""
         self._sync_text_scaling_controls()
         event.Skip()
     
-    def get_values(self) -> tuple[str, Path, float, bool]:
-        """Return (part_name, out_dir, text_scale, use_kicad_native_overlay)."""
+    def get_values(self) -> tuple[str, Path, float, float, str, str, bool]:
+        """Return dialog values including rendering options."""
         part_name = self.part_name_input.GetValue()
         out_dir = self._resolve_output_dir(self.dir_input.GetValue())
+
         try:
             text_scale = float(self.scale_input.GetValue())
         except ValueError:
             text_scale = 1.15
+
+        try:
+            pad_scale = float(self.pad_scale_input.GetValue())
+        except ValueError:
+            pad_scale = 1.0
+
+        pad_scale = max(0.2, min(3.0, pad_scale))
+
+        soldermask_color = _normalize_hex_color(self.soldermask_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#2b5f82")
+        silkscreen_color = _normalize_hex_color(self.silkscreen_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#f5f5f5")
+
         use_kicad_native_overlay = bool(self.use_kicad_native_overlay.GetValue())
-        return part_name, out_dir, text_scale, use_kicad_native_overlay
+        return (
+            part_name,
+            out_dir,
+            text_scale,
+            pad_scale,
+            soldermask_color,
+            silkscreen_color,
+            use_kicad_native_overlay,
+        )
 
 
 class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
@@ -434,38 +490,46 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
         
         dlg = KiCad2FritzingDialog(None, board_path)
         if dlg.ShowModal() == wx.ID_OK:
-            part_name, out_dir, text_scale, use_kicad_native_overlay = dlg.get_values()
+            (
+                part_name,
+                out_dir,
+                text_scale,
+                pad_scale,
+                soldermask_color,
+                silkscreen_color,
+                use_kicad_native_overlay,
+            ) = dlg.get_values()
             out_dir.mkdir(parents=True, exist_ok=True)
-            
-            # Set text scaling as environment variable
-            previous_text_scale = os.environ.get("K2F_SILK_TEXT_SCALE")
-            os.environ["K2F_SILK_TEXT_SCALE"] = str(text_scale)
-            
-            try:
-                export_board_to_fritzing_stub(board_path, out_dir, part_name=part_name)
 
-                native_overlay_applied = False
+            render_options = {
+                "soldermask_color": soldermask_color,
+                "silkscreen_color": silkscreen_color,
+                "pad_scale": pad_scale,
+                "silk_text_scale": text_scale,
+            }
+            export_board_to_fritzing_stub(
+                board_path,
+                out_dir,
+                part_name=part_name,
+                render_options=render_options,
+            )
 
-                if use_kicad_native_overlay:
-                    plotted = plot_kicad_svg_layers(board, out_dir / "kicad_svg_plots")
-                    overlaid_path = overlay_kicad_plots_on_breadboard(
-                        out_dir,
-                        plotted,
-                        replace_custom_silkscreen=True,
-                    )
-                    native_overlay_applied = overlaid_path is not None
+            native_overlay_applied = False
 
-                write_overlay_mode_marker(
+            if use_kicad_native_overlay:
+                plotted = plot_kicad_svg_layers(board, out_dir / "kicad_svg_plots")
+                overlaid_path = overlay_kicad_plots_on_breadboard(
                     out_dir,
-                    requested_native_overlay=use_kicad_native_overlay,
-                    applied_native_overlay=native_overlay_applied,
+                    plotted,
+                    replace_custom_silkscreen=True,
                 )
-            finally:
-                # Restore previous text scaling environment state.
-                if previous_text_scale is None:
-                    os.environ.pop("K2F_SILK_TEXT_SCALE", None)
-                else:
-                    os.environ["K2F_SILK_TEXT_SCALE"] = previous_text_scale
+                native_overlay_applied = overlaid_path is not None
+
+            write_overlay_mode_marker(
+                out_dir,
+                requested_native_overlay=use_kicad_native_overlay,
+                applied_native_overlay=native_overlay_applied,
+            )
         
         dlg.Destroy()
 

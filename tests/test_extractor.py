@@ -447,6 +447,57 @@ def test_write_placeholder_svg_views_crops_square_board_width(tmp_path: Path) ->
     assert 'width="160" height="160"' in breadboard
 
 
+def test_write_placeholder_svg_views_applies_render_options(tmp_path: Path) -> None:
+    connector_model = {
+        "source_board": "demo.kicad_pcb",
+        "connector_count": 1,
+        "connectors": [
+            {"id": "J1_pad1", "name": "Pin_1", "position_mm": {"x": 10.0, "y": 10.0}},
+        ],
+    }
+
+    board_model = {
+        "board_outline": {
+            "polygons": [
+                [
+                    {"x": 0.0, "y": 0.0},
+                    {"x": 20.0, "y": 0.0},
+                    {"x": 20.0, "y": 20.0},
+                    {"x": 0.0, "y": 20.0},
+                ]
+            ],
+            "bounds_mm": {"min_x": 0.0, "min_y": 0.0, "max_x": 20.0, "max_y": 20.0},
+        },
+        "silkscreen": {
+            "texts": [
+                {"text": "IN", "x_mm": 5.0, "y_mm": 6.0, "rotation_deg": 0.0, "size_mm": 1.27}
+            ],
+            "lines": [],
+            "polygons": [],
+        },
+    }
+
+    write_placeholder_svg_views(
+        connector_model,
+        tmp_path,
+        board_model=board_model,
+        render_options={
+            "soldermask_color": "#123456",
+            "silkscreen_color": "#ddeeff",
+            "pad_scale": 0.5,
+            "silk_text_scale": 1.2,
+        },
+    )
+
+    breadboard = (tmp_path / "breadboard.svg").read_text(encoding="utf-8")
+    pcb = (tmp_path / "pcb.svg").read_text(encoding="utf-8")
+
+    assert 'fill="#123456"' in breadboard
+    assert 'fill="#123456"' in pcb
+    assert 'fill="#ddeeff"' in breadboard
+    assert 'r="1.9" fill="#ffb300"' in breadboard
+
+
 def test_validate_generated_artifacts_success(tmp_path: Path) -> None:
     connector_model = {
         "source_board": "demo.kicad_pcb",

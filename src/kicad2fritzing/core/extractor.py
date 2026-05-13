@@ -47,7 +47,63 @@ VIEW_IMAGE_PATHS = {
     "pcb": "pcb/pcb.svg",
 }
 GENERIC_PINFUNCTION_RE = re.compile(r"^pin[_\s-]*\d+$", re.IGNORECASE)
-SILK_TEXT_SIZE_MULTIPLIER = float(os.getenv("K2F_SILK_TEXT_SCALE", "1.15"))
+HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
+
+DEFAULT_RENDER_OPTIONS = {
+    "soldermask_color": "#2b5f82",
+    "silkscreen_color": "#f5f5f5",
+    "pad_scale": 1.0,
+    "silk_text_scale": 1.15,
+}
+
+
+def _resolve_render_options(render_options: dict | None) -> dict:
+    """Merge and sanitize render options for SVG generation."""
+    options = dict(DEFAULT_RENDER_OPTIONS)
+    if render_options:
+        options.update(render_options)
+
+    if not (render_options and "silk_text_scale" in render_options):
+        options["silk_text_scale"] = float(
+            os.getenv("K2F_SILK_TEXT_SCALE", str(DEFAULT_RENDER_OPTIONS["silk_text_scale"]))
+        )
+
+    def _sanitize_color(value: object, fallback: str) -> str:
+        if isinstance(value, str):
+            text = value.strip()
+            if HEX_COLOR_RE.fullmatch(text):
+                return text.lower()
+        return fallback
+
+    def _sanitize_float(value: object, fallback: float, min_value: float, max_value: float) -> float:
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return fallback
+        return max(min_value, min(max_value, numeric))
+
+    options["soldermask_color"] = _sanitize_color(
+        options.get("soldermask_color"),
+        DEFAULT_RENDER_OPTIONS["soldermask_color"],
+    )
+    options["silkscreen_color"] = _sanitize_color(
+        options.get("silkscreen_color"),
+        DEFAULT_RENDER_OPTIONS["silkscreen_color"],
+    )
+    options["pad_scale"] = _sanitize_float(
+        options.get("pad_scale"),
+        DEFAULT_RENDER_OPTIONS["pad_scale"],
+        0.2,
+        3.0,
+    )
+    options["silk_text_scale"] = _sanitize_float(
+        options.get("silk_text_scale"),
+        DEFAULT_RENDER_OPTIONS["silk_text_scale"],
+        0.5,
+        3.0,
+    )
+
+    return options
 
 
 def _rotate_point(x: float, y: float, angle_deg: float) -> tuple[float, float]:
@@ -153,6 +209,7 @@ def _render_svg_silkscreen(
     margin: int,
     scale: float,
     color: str,
+    text_scale: float,
 ) -> str:
     silkscreen = (board_model or {}).get("silkscreen", {})
     parts: list[str] = []
@@ -197,7 +254,7 @@ def _render_svg_silkscreen(
         )
         font_size = max(
             3.0,
-            round(float(text_item.get("size_mm", 1.0)) * scale * SILK_TEXT_SIZE_MULTIPLIER, 3),
+            round(float(text_item.get("size_mm", 1.0)) * scale * text_scale, 3),
         )
         angle = -float(text_item.get("rotation_deg", 0.0))
         h_align = str(text_item.get("h_align", "center"))
@@ -423,9 +480,16 @@ def _tight_canvas_size(
     return width, height
 
 
-def _scaled_pad_radius(scale: float, min_radius: float = 1.6, max_radius: float = 3.8) -> float:
+def _scaled_pad_radius(
+    scale: float,
+    min_radius: float = 1.6,
+    max_radius: float = 3.8,
+    pad_scale: float = 1.0,
+) -> float:
     # Through-hole annulus is roughly 1.8-2.0 mm on many boards; keep a sane screen clamp.
-    return round(max(min_radius, min(max_radius, 0.95 * scale)), 3)
+    base_radius = max(min_radius, min(max_radius, 0.95 * scale))
+    adjusted = base_radius * pad_scale
+    return round(max(0.4, min(max_radius * 2.0, adjusted)), 3)
 
 
 def parse_kicad_board_to_model(board_file: Path) -> dict:
@@ -1037,7 +1101,13 @@ def _project_outline_polygon(
     return projected
 
 
-def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | None = None) -> str:
+def _svg_for_view(
+    view_name: str,
+    connector_model: dict,
+    board_model: dict | None = None,
+    render_options: dict | None = None,
+) -> str:
+    options = _resolve_render_options(render_options)
     connector_count = int(connector_model.get("connector_count", 0))
     board_outline = (board_model or {}).get("board_outline", {})
     bounds_mm = board_outline.get("bounds_mm")
@@ -1057,11 +1127,20 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
             pins.append(
                 f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="3" fill="#455a64"/>'
             )
-        silkscreen_svg = _render_svg_silkscreen(board_model, bounds, width, height, 16, scale, "#37474f")
+        silkscreen_svg = _render_svg_silkscreen(
+            board_model,
+            bounds,
+            width,
+            height,
+            16,
+            scale,
+            str(options["silkscreen_color"]),
+            float(options["silk_text_scale"]),
+        )
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
             f'viewBox="0 0 {width} {height}">'
-            '<rect x="6" y="6" width="148" height="88" fill="#eceff1" '
+            f'<rect x="6" y="6" width="148" height="88" fill="{options["soldermask_color"]}" '
             'stroke="#607d8b" stroke-width="2"/>'
             + silkscreen_svg
             + "".join(pins)
@@ -1083,7 +1162,7 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
             outline = [(10.0, 150.0), (250.0, 150.0), (250.0, 10.0), (10.0, 10.0)]
         width, height = _tight_canvas_size(outline, (width, height), 20)
         outline_points = " ".join(f"{x},{y}" for x, y in outline)
-        pad_radius = _scaled_pad_radius(scale)
+        pad_radius = _scaled_pad_radius(scale, pad_scale=float(options["pad_scale"]))
         pad_stroke = round(max(0.7, pad_radius * 0.34), 3)
         pins = []
         for i, (x, y) in enumerate(projected):
@@ -1091,11 +1170,20 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
                 f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="{pad_radius}" '
                 f'fill="#ffb300" stroke="#d84315" stroke-width="{pad_stroke}"/>'
             )
-        silkscreen_svg = _render_svg_silkscreen(board_model, bounds, width, height, 20, scale, "#f5f5f5")
+        silkscreen_svg = _render_svg_silkscreen(
+            board_model,
+            bounds,
+            width,
+            height,
+            20,
+            scale,
+            str(options["silkscreen_color"]),
+            float(options["silk_text_scale"]),
+        )
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
             f'viewBox="0 0 {width} {height}">'
-            f'<polygon id="boardOutline" points="{outline_points}" fill="#2b5f82" '
+            f'<polygon id="boardOutline" points="{outline_points}" fill="{options["soldermask_color"]}" '
             'stroke="#0f4c81" stroke-width="2"/>'
             + silkscreen_svg
             + "".join(pins)
@@ -1148,7 +1236,12 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
         outline = [(10.0, 150.0), (250.0, 150.0), (250.0, 10.0), (10.0, 10.0)]
     width, height = _tight_canvas_size(outline, (width, height), 20)
     outline_points = " ".join(f"{x},{y}" for x, y in outline)
-    pad_radius = _scaled_pad_radius(scale, min_radius=1.2, max_radius=3.2)
+    pad_radius = _scaled_pad_radius(
+        scale,
+        min_radius=1.2,
+        max_radius=3.2,
+        pad_scale=float(options["pad_scale"]),
+    )
     pad_stroke = round(max(0.8, pad_radius * 0.5), 3)
     top_pins = []
     bottom_pins = []
@@ -1159,13 +1252,22 @@ def _svg_for_view(view_name: str, connector_model: dict, board_model: dict | Non
         )
         top_pins.append(pin_svg)
         bottom_pins.append(pin_svg)
-    silkscreen_svg = _render_svg_silkscreen(board_model, bounds, width, height, 20, scale, "#f5f5f5")
+    silkscreen_svg = _render_svg_silkscreen(
+        board_model,
+        bounds,
+        width,
+        height,
+        20,
+        scale,
+        str(options["silkscreen_color"]),
+        float(options["silk_text_scale"]),
+    )
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
         f'viewBox="0 0 {width} {height}">'
         '<g id="board">'
-        f'<polygon id="boardOutline" points="{outline_points}" fill="#2e7d32" '
+        f'<polygon id="boardOutline" points="{outline_points}" fill="{options["soldermask_color"]}" '
         'stroke="#1b5e20" stroke-width="2"/>'
         + silkscreen_svg
         + '</g>'
@@ -1183,6 +1285,7 @@ def write_placeholder_svg_views(
     connector_model: dict,
     out_dir: Path,
     board_model: dict | None = None,
+    render_options: dict | None = None,
 ) -> list[Path]:
     """Write SVG view files aligned with generated connector IDs and geometry."""
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -1191,7 +1294,7 @@ def write_placeholder_svg_views(
     for view_name in ("icon", "breadboard", "schematic", "pcb"):
         path = out_dir / f"{view_name}.svg"
         path.write_text(
-            _svg_for_view(view_name, connector_model, board_model),
+            _svg_for_view(view_name, connector_model, board_model, render_options=render_options),
             encoding="utf-8",
         )
         outputs.append(path)
@@ -1302,6 +1405,7 @@ def export_board_to_fritzing_stub(
     board_file: Path,
     out_dir: Path,
     part_name: str | None = None,
+    render_options: dict | None = None,
 ) -> Path:
     """Create a placeholder conversion output for initial project wiring.
     
@@ -1329,7 +1433,12 @@ def export_board_to_fritzing_stub(
     connector_model = map_model_to_fritzing_connectors(model)
     write_fritzing_connector_model_json(connector_model, out_dir)
     write_fritzing_part_fzp(connector_model, out_dir, part_basename=part_basename)
-    write_placeholder_svg_views(connector_model, out_dir, board_model=model)
+    write_placeholder_svg_views(
+        connector_model,
+        out_dir,
+        board_model=model,
+        render_options=render_options,
+    )
     report = validate_generated_artifacts(connector_model, out_dir, part_basename=part_basename)
     write_artifact_validation_report(report, out_dir)
 
