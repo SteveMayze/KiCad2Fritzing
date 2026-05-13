@@ -7,6 +7,7 @@ import logging
 from pathlib import Path
 
 from kicad2fritzing.core.extractor import export_board_to_fritzing_stub
+from kicad2fritzing.kicad.plugin import embed_3d_render_in_breadboard_svg, render_board_3d
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -38,6 +39,17 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include component body layer (F.Fab) outlines in generated SVG views",
     )
     parser.add_argument(
+        "--render-3d",
+        action="store_true",
+        help="Embed a photorealistic top-down 3D render into the breadboard SVG (requires kicad-cli)",
+    )
+    parser.add_argument(
+        "--kicad-cli-path",
+        type=str,
+        default=None,
+        help="Path to kicad-cli executable (auto-detected when omitted)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -64,6 +76,26 @@ def main() -> int:
         },
     )
     logging.info("Wrote placeholder output: %s", output_file)
+
+    if args.render_3d:
+        import json
+        board_bounds_mm = None
+        model_json_path = args.out_dir / "board_model.json"
+        if model_json_path.exists():
+            model_data = json.loads(model_json_path.read_text(encoding="utf-8"))
+            board_bounds_mm = model_data.get("board_outline", {}).get("bounds_mm")
+        render_png = render_board_3d(
+            args.board_file,
+            args.out_dir / "kicad_svg_plots",
+            board_bounds_mm=board_bounds_mm,
+            kicad_cli_path=args.kicad_cli_path,
+        )
+        if render_png:
+            embed_3d_render_in_breadboard_svg(args.out_dir, render_png)
+            logging.info("Embedded 3D render: %s", render_png)
+        else:
+            logging.warning("3D render failed or kicad-cli not found; breadboard SVG unchanged")
+
     return 0
 
 

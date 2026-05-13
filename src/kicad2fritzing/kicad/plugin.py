@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import base64
 import copy
 import json
 import os
 import re
+import shutil
+import subprocess
 from xml.etree import ElementTree as ET
 from pathlib import Path
 
@@ -255,6 +258,154 @@ def _normalize_hex_color(value: str, fallback: str) -> str:
     return fallback
 
 
+def _find_kicad_cli(override: str | None) -> str | None:
+    """Locate the kicad-cli executable, returning its path or None."""
+    if override:
+        p = Path(override)
+        if p.is_file():
+            return str(p)
+        return None
+    candidates = [
+        "/Applications/KiCad-10.01/KiCad.app/Contents/MacOS/kicad-cli",
+        "/Applications/KiCad/KiCad.app/Contents/MacOS/kicad-cli",
+    ]
+    for c in candidates:
+        if Path(c).is_file():
+            return c
+    return shutil.which("kicad-cli")
+
+
+def render_board_3d(
+    board_file: Path,
+    out_dir: Path,
+    board_bounds_mm: dict | None = None,
+    kicad_cli_path: str | None = None,
+) -> "Path | None":
+    """Render the board top-down using kicad-cli and return the PNG path.
+
+    Uses orthogonal (non-perspective) projection so component positions map
+    exactly onto their XY footprint coordinates regardless of part height.
+    Returns None when kicad-cli is unavailable or the render fails.
+    """
+    cli = _find_kicad_cli(kicad_cli_path)
+    if cli is None:
+        return None
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    render_path = out_dir / "board_render.png"
+
+    # Compute pixel dimensions matching the board aspect ratio so we can
+    # later use preserveAspectRatio="none" for a pixel-perfect fit.
+    width_px, height_px = 2000, 2000
+    if board_bounds_mm:
+        bw = board_bounds_mm.get("max_x", 1.0) - board_bounds_mm.get("min_x", 0.0)
+        bh = board_bounds_mm.get("max_y", 1.0) - board_bounds_mm.get("min_y", 0.0)
+        if bw > 0 and bh > 0:
+            if bw >= bh:
+                height_px = max(100, round(2000 * bh / bw))
+            else:
+                width_px = max(100, round(2000 * bw / bh))
+
+    cmd = [
+        cli, "pcb", "render",
+        "--side", "top",
+        "--background", "transparent",
+        "--quality", "high",
+        "--width", str(width_px),
+        "--height", str(height_px),
+        "--output", str(render_path),
+        str(board_file),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        if result.returncode == 0 and render_path.exists():
+            return render_path
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
+def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
+    """Embed a board render PNG into the breadboard SVG as a base64 data URI.
+
+    Sets the boardOutline fill to none so the render provides the board colour,
+    clips the image to the exact board shape, and inserts it behind all overlays
+    and connector pins.
+    """
+    breadboard_svg_path = out_dir / "breadboard.svg"
+    if not breadboard_svg_path.exists() or not render_path.exists():
+        return False
+
+    ET.register_namespace("", SVG_NS)
+    tree = ET.parse(breadboard_svg_path)
+    root = tree.getroot()
+
+    board_bounds = _board_outline_bounds(root)
+    if board_bounds is None:
+        return False
+    bx, by, bw, bh = board_bounds
+
+    # Locate boardOutline, strip its fill, capture its polygon points.
+    board_outline_points = ""
+    board_outline_idx: int | None = None
+    for i, elem in enumerate(root):
+        if elem.attrib.get("id") == "boardOutline":
+            elem.attrib["fill"] = "none"
+            board_outline_points = elem.attrib.get("points", "")
+            board_outline_idx = i
+            break
+
+    # Remove any previously embedded render group.
+    for elem in list(root):
+        if elem.attrib.get("id") == "render3d":
+            root.remove(elem)
+
+    # Ensure <defs> exists at position 0.
+    defs = root.find(f"{{{SVG_NS}}}defs")
+    if defs is None:
+        defs = ET.Element(f"{{{SVG_NS}}}defs")
+        root.insert(0, defs)
+        if board_outline_idx is not None:
+            board_outline_idx += 1
+
+    # (Re-)create the boardClip clipPath.
+    for elem in list(defs):
+        if elem.attrib.get("id") == "boardClip":
+            defs.remove(elem)
+    if board_outline_points:
+        clip_path = ET.SubElement(defs, f"{{{SVG_NS}}}clipPath", {"id": "boardClip"})
+        ET.SubElement(clip_path, f"{{{SVG_NS}}}polygon", {"points": board_outline_points})
+
+    # Build the render group with an embedded PNG image.
+    group_attrs: dict[str, str] = {"id": "render3d"}
+    if board_outline_points:
+        group_attrs["clip-path"] = "url(#boardClip)"
+    render_group = ET.Element(f"{{{SVG_NS}}}g", group_attrs)
+    png_data = base64.b64encode(render_path.read_bytes()).decode("ascii")
+    ET.SubElement(
+        render_group,
+        f"{{{SVG_NS}}}image",
+        {
+            "x": str(round(bx, 3)),
+            "y": str(round(by, 3)),
+            "width": str(round(bw, 3)),
+            "height": str(round(bh, 3)),
+            "href": f"data:image/png;base64,{png_data}",
+            # preserveAspectRatio="none" works correctly here because we
+            # computed the PNG dimensions to match the board aspect ratio.
+            "preserveAspectRatio": "none",
+        },
+    )
+
+    # Insert the render group immediately after boardOutline so the
+    # outline stroke, silkscreen and connector pins all render on top.
+    insert_at = (board_outline_idx + 1) if board_outline_idx is not None else 1
+    root.insert(insert_at, render_group)
+
+    tree.write(breadboard_svg_path, encoding="utf-8", xml_declaration=False)
+    return True
+
+
 class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
     """Dialog for KiCad to Fritzing part generation settings."""
 
@@ -263,7 +414,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         if wx is None:
             raise RuntimeError("wxPython not available")
         
-        wx.Dialog.__init__(self, parent, title="KiCad to Fritzing Part Generation", size=(720, 430))
+        wx.Dialog.__init__(self, parent, title="KiCad to Fritzing Part Generation", size=(720, 510))
         self.board_path = board_path
         self.project_dir = board_path.parent.resolve()
         
@@ -363,6 +514,28 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         silkscreen_sizer.Add(self.include_fab_layer, 0, wx.BOTTOM, 8)
 
         sizer.Add(silkscreen_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # Photorealistic 3D render
+        self.use_3d_render = wx.CheckBox(
+            panel,
+            label="Photorealistic 3D render (requires kicad-cli)",
+        )
+        self.use_3d_render.SetValue(False)
+        self.use_3d_render.Bind(wx.EVT_CHECKBOX, self._on_3d_render_toggle)
+        sizer.Add(self.use_3d_render, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        kicad_cli_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.kicad_cli_label = wx.StaticText(panel, label="kicad-cli path:")
+        self.kicad_cli_path_input = wx.TextCtrl(
+            panel, value=_find_kicad_cli(None) or "", size=(320, -1)
+        )
+        self.kicad_cli_detect_btn = wx.Button(panel, label="Detect", size=(70, -1))
+        self.kicad_cli_detect_btn.Bind(wx.EVT_BUTTON, self._on_detect_kicad_cli)
+        kicad_cli_sizer.Add(self.kicad_cli_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        kicad_cli_sizer.Add(self.kicad_cli_path_input, 1, wx.RIGHT, 5)
+        kicad_cli_sizer.Add(self.kicad_cli_detect_btn, 0)
+        sizer.Add(kicad_cli_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+        self._sync_3d_render_controls()
         
         # Render colors
         color_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -497,12 +670,36 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         self.scale_input.Enable(enable_custom_controls)
         self.scale_label.Enable(enable_custom_controls)
 
+    def _sync_3d_render_controls(self) -> None:
+        """Enable kicad-cli path controls only when 3D render is enabled."""
+        enabled = bool(self.use_3d_render.GetValue())
+        self.kicad_cli_label.Enable(enabled)
+        self.kicad_cli_path_input.Enable(enabled)
+        self.kicad_cli_detect_btn.Enable(enabled)
+
     def _on_native_overlay_toggle(self, event) -> None:
         """Update control state when native-overlay checkbox changes."""
         self._sync_text_scaling_controls()
         event.Skip()
+
+    def _on_3d_render_toggle(self, event) -> None:
+        """Update control state when 3D render checkbox changes."""
+        self._sync_3d_render_controls()
+        event.Skip()
+
+    def _on_detect_kicad_cli(self, event) -> None:
+        """Auto-detect kicad-cli and populate the path field."""
+        found = _find_kicad_cli(None)
+        if found:
+            self.kicad_cli_path_input.SetValue(found)
+        else:
+            wx.MessageBox(
+                "kicad-cli not found. Please enter the path manually.",
+                "kicad-cli Not Found",
+                wx.OK | wx.ICON_INFORMATION,
+            )
     
-    def get_values(self) -> tuple[str, Path, float, float, str, str, str, str, bool, bool, bool]:
+    def get_values(self) -> tuple[str, Path, float, float, str, str, str, str, bool, bool, bool, bool, str]:
         """Return dialog values including rendering options."""
         part_name = self.part_name_input.GetValue()
         part_family = self.part_family_input.GetValue().strip() or "KiCad2Fritzing Generated"
@@ -527,6 +724,8 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         use_kicad_native_overlay = bool(self.use_kicad_native_overlay.GetValue())
         include_component_silkscreen = bool(self.include_component_silkscreen.GetValue())
         include_fab_layer = bool(self.include_fab_layer.GetValue())
+        use_3d_render = bool(self.use_3d_render.GetValue())
+        kicad_cli_path = self.kicad_cli_path_input.GetValue().strip()
         return (
             part_name,
             out_dir,
@@ -539,6 +738,8 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             use_kicad_native_overlay,
             include_component_silkscreen,
             include_fab_layer,
+            use_3d_render,
+            kicad_cli_path,
         )
 
 
@@ -581,6 +782,8 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
                 use_kicad_native_overlay,
                 include_component_silkscreen,
                 include_fab_layer,
+                use_3d_render,
+                kicad_cli_path,
             ) = dlg.get_values()
             out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -622,6 +825,21 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
                 requested_native_overlay=use_kicad_native_overlay,
                 applied_native_overlay=native_overlay_applied,
             )
+
+            if use_3d_render:
+                board_bounds_mm = None
+                model_json_path = out_dir / "board_model.json"
+                if model_json_path.exists():
+                    model_data = json.loads(model_json_path.read_text(encoding="utf-8"))
+                    board_bounds_mm = model_data.get("board_outline", {}).get("bounds_mm")
+                render_png = render_board_3d(
+                    board_path,
+                    out_dir / "kicad_svg_plots",
+                    board_bounds_mm=board_bounds_mm,
+                    kicad_cli_path=kicad_cli_path or None,
+                )
+                if render_png:
+                    embed_3d_render_in_breadboard_svg(out_dir, render_png)
         
         dlg.Destroy()
 
