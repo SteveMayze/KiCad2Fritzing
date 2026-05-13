@@ -1,4 +1,4 @@
-"""KiCad Action Plugin bridge for launching KiCad2Fritzing from PCB Editor."""
+"""KiCad Action Plugin bridge for launching KiCad to Fritzing from PCB Editor."""
 
 from __future__ import annotations
 
@@ -241,15 +241,16 @@ def write_overlay_mode_marker(
 
 
 class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
-    """Dialog for KiCad2Fritzing part generation settings."""
+    """Dialog for KiCad to Fritzing part generation settings."""
 
     def __init__(self, parent, board_path: Path) -> None:
         """Initialize dialog with default values from board path."""
         if wx is None:
             raise RuntimeError("wxPython not available")
         
-        wx.Dialog.__init__(self, parent, title="KiCad2Fritzing Part Generation", size=(620, 360))
+        wx.Dialog.__init__(self, parent, title="KiCad to Fritzing Part Generation", size=(720, 360))
         self.board_path = board_path
+        self.project_dir = board_path.parent.resolve()
         
         # Panel setup
         panel = wx.Panel(self)
@@ -275,11 +276,14 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             size=(350, -1)
         )
         self.browse_btn = wx.Button(panel, label="Browse", size=(80, -1))
+        self.open_dir_btn = wx.Button(panel, label="Open", size=(80, -1))
         self.browse_btn.Bind(wx.EVT_BUTTON, self._on_browse)
+        self.open_dir_btn.Bind(wx.EVT_BUTTON, self._on_open_output_dir)
         dir_sizer = wx.BoxSizer(wx.HORIZONTAL)
         dir_sizer.Add(dir_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
         dir_sizer.Add(self.dir_input, 1, wx.EXPAND | wx.RIGHT, 5)
-        dir_sizer.Add(self.browse_btn, 0)
+        dir_sizer.Add(self.browse_btn, 0, wx.RIGHT, 5)
+        dir_sizer.Add(self.open_dir_btn, 0)
         sizer.Add(dir_sizer, 0, wx.ALL | wx.EXPAND, 10)
         
         # Text Scaling
@@ -315,15 +319,70 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
     
     def _on_browse(self, event) -> None:
         """Handle browse button click."""
+        current_path = self._resolve_output_dir(self.dir_input.GetValue())
+        default_path = str(current_path if current_path.exists() else self.project_dir)
         dlg = wx.DirDialog(
             self,
             "Choose output directory",
-            defaultPath=self.dir_input.GetValue(),
+            defaultPath=default_path,
             style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST
         )
         if dlg.ShowModal() == wx.ID_OK:
-            self.dir_input.SetValue(dlg.GetPath())
+            chosen = Path(dlg.GetPath()).resolve()
+            if self._is_within_project_dir(chosen):
+                relative_path = os.path.relpath(chosen, self.project_dir)
+                prompt = wx.MessageDialog(
+                    self,
+                    "Selected directory is inside this KiCad project. Store it as a relative path?",
+                    "Store Relative Path",
+                    wx.YES_NO | wx.ICON_QUESTION,
+                )
+                if prompt.ShowModal() == wx.ID_YES:
+                    self.dir_input.SetValue(relative_path)
+                else:
+                    self.dir_input.SetValue(str(chosen))
+                prompt.Destroy()
+            else:
+                self.dir_input.SetValue(str(chosen))
         dlg.Destroy()
+
+    def _is_within_project_dir(self, path: Path) -> bool:
+        """Return True when path is inside the current project directory."""
+        try:
+            path.relative_to(self.project_dir)
+            return True
+        except ValueError:
+            return False
+
+    def _resolve_output_dir(self, raw_path: str) -> Path:
+        """Resolve user-entered output path, supporting project-relative notation."""
+        path = Path(raw_path).expanduser()
+        if path.is_absolute():
+            return path
+        return (self.project_dir / path).resolve()
+
+    def _on_open_output_dir(self, event) -> None:
+        """Open current output directory in the system file manager."""
+        out_dir = self._resolve_output_dir(self.dir_input.GetValue())
+        if not out_dir.exists():
+            prompt = wx.MessageDialog(
+                self,
+                f"Create and open this directory?\n{out_dir}",
+                "Create Output Directory",
+                wx.YES_NO | wx.ICON_QUESTION,
+            )
+            should_create = prompt.ShowModal() == wx.ID_YES
+            prompt.Destroy()
+            if not should_create:
+                return
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+        if not wx.LaunchDefaultApplication(str(out_dir)):
+            wx.MessageBox(
+                f"Unable to open directory:\n{out_dir}",
+                "Open Directory Failed",
+                wx.OK | wx.ICON_ERROR,
+            )
 
     def _sync_text_scaling_controls(self) -> None:
         """Enable text-scaling input only for custom silkscreen rendering."""
@@ -339,7 +398,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
     def get_values(self) -> tuple[str, Path, float, bool]:
         """Return (part_name, out_dir, text_scale, use_kicad_native_overlay)."""
         part_name = self.part_name_input.GetValue()
-        out_dir = Path(self.dir_input.GetValue())
+        out_dir = self._resolve_output_dir(self.dir_input.GetValue())
         try:
             text_scale = float(self.scale_input.GetValue())
         except ValueError:
@@ -352,7 +411,7 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
     """Action plugin wrapper for KiCad's PCB Editor."""
 
     def defaults(self) -> None:
-        self.name = "KiCad2Fritzing"
+        self.name = "KiCad to Fritzing"
         self.category = "Export"
         self.description = "Export current KiCad board into Fritzing starter assets"
         self.show_toolbar_button = True
