@@ -326,6 +326,36 @@ def test_build_fritzing_part_fzp_contains_expected_connectors() -> None:
     assert "Pin_2" in fzp
 
 
+def test_build_fritzing_part_fzp_includes_default_family_and_type() -> None:
+    connector_model = {
+        "source_board": "demo.kicad_pcb",
+        "connector_count": 0,
+        "connectors": [],
+    }
+
+    fzp = build_fritzing_part_fzp(connector_model)
+
+    assert '<property name="family">KiCad2Fritzing Generated</property>' in fzp
+    assert '<property name="type">Custom PCB</property>' in fzp
+
+
+def test_build_fritzing_part_fzp_allows_family_and_type_overrides() -> None:
+    connector_model = {
+        "source_board": "demo.kicad_pcb",
+        "connector_count": 0,
+        "connectors": [],
+    }
+
+    fzp = build_fritzing_part_fzp(
+        connector_model,
+        part_family="Sensor Board",
+        part_type="Current Monitor",
+    )
+
+    assert '<property name="family">Sensor Board</property>' in fzp
+    assert '<property name="type">Current Monitor</property>' in fzp
+
+
 def test_write_fritzing_part_fzp(tmp_path: Path) -> None:
     connector_model = {
         "source_board": "demo.kicad_pcb",
@@ -370,6 +400,23 @@ def test_export_board_to_fritzing_stub_part_name_override(tmp_path: Path) -> Non
 
     assert output == tmp_path / "My_Custom_Part.fzpz"
     assert (tmp_path / "My_Custom_Part.fzp").exists()
+
+
+def test_export_board_to_fritzing_stub_writes_family_and_type_overrides(tmp_path: Path) -> None:
+    board_file = tmp_path / "demo-board.kicad_pcb"
+    board_file.write_text("(kicad_pcb)", encoding="utf-8")
+
+    export_board_to_fritzing_stub(
+        board_file,
+        tmp_path,
+        part_name="My Custom Part",
+        part_family="Power Module",
+        part_type="Buck Regulator",
+    )
+
+    content = (tmp_path / "My_Custom_Part.fzp").read_text(encoding="utf-8")
+    assert '<property name="family">Power Module</property>' in content
+    assert '<property name="type">Buck Regulator</property>' in content
 
 
 def test_write_placeholder_svg_views(tmp_path: Path) -> None:

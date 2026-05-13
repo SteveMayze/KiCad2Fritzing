@@ -321,6 +321,26 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         part_sizer.Add(self.part_name_input, 1, wx.EXPAND)
         sizer.Add(part_sizer, 0, wx.ALL | wx.EXPAND, 10)
 
+        # Fritzing metadata
+        metadata_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        family_label = wx.StaticText(panel, label="Part Family:")
+        self.part_family_input = wx.TextCtrl(
+            panel,
+            value="KiCad2Fritzing Generated",
+            size=(230, -1),
+        )
+        type_label = wx.StaticText(panel, label="Part Type:")
+        self.part_type_input = wx.TextCtrl(
+            panel,
+            value="Custom PCB",
+            size=(190, -1),
+        )
+        metadata_sizer.Add(family_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        metadata_sizer.Add(self.part_family_input, 1, wx.RIGHT, 16)
+        metadata_sizer.Add(type_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        metadata_sizer.Add(self.part_type_input, 1)
+        sizer.Add(metadata_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+
         # Render colors
         color_sizer = wx.BoxSizer(wx.HORIZONTAL)
         soldermask_label = wx.StaticText(panel, label="Soldermask color:")
@@ -459,9 +479,11 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         self._sync_text_scaling_controls()
         event.Skip()
     
-    def get_values(self) -> tuple[str, Path, float, float, str, str, bool]:
+    def get_values(self) -> tuple[str, Path, float, float, str, str, str, str, bool]:
         """Return dialog values including rendering options."""
         part_name = self.part_name_input.GetValue()
+        part_family = self.part_family_input.GetValue().strip() or "KiCad2Fritzing Generated"
+        part_type = self.part_type_input.GetValue().strip() or "Custom PCB"
         out_dir = self._resolve_output_dir(self.dir_input.GetValue())
 
         try:
@@ -487,6 +509,8 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             pad_scale,
             soldermask_color,
             silkscreen_color,
+            part_family,
+            part_type,
             use_kicad_native_overlay,
         )
 
@@ -525,6 +549,8 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
                 pad_scale,
                 soldermask_color,
                 silkscreen_color,
+                part_family,
+                part_type,
                 use_kicad_native_overlay,
             ) = dlg.get_values()
             out_dir.mkdir(parents=True, exist_ok=True)
@@ -540,6 +566,8 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
                 out_dir,
                 part_name=part_name,
                 render_options=render_options,
+                part_family=part_family,
+                part_type=part_type,
             )
 
             native_overlay_applied = False

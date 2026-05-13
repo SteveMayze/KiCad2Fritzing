@@ -954,10 +954,25 @@ def _sanitize_part_basename(name: str) -> str:
     return cleaned or "generated_part"
 
 
-def build_fritzing_part_fzp(connector_model: dict, part_basename: str = "generated_part") -> str:
+def _sanitize_part_property(value: str | None, fallback: str) -> str:
+    """Return a safe, non-empty part property string for .fzp metadata."""
+    if value is None:
+        return fallback
+    cleaned = value.strip()
+    return cleaned or fallback
+
+
+def build_fritzing_part_fzp(
+    connector_model: dict,
+    part_basename: str = "generated_part",
+    part_family: str = "KiCad2Fritzing Generated",
+    part_type: str = "Custom PCB",
+) -> str:
     """Build a minimal Fritzing part XML document from connector model data."""
     safe_basename = _sanitize_part_basename(part_basename)
     part_title = safe_basename.replace("_", " ")
+    safe_family = _sanitize_part_property(part_family, "KiCad2Fritzing Generated")
+    safe_type = _sanitize_part_property(part_type, "Custom PCB")
     module = ET.Element(
         "module",
         {
@@ -979,7 +994,9 @@ def build_fritzing_part_fzp(connector_model: dict, part_basename: str = "generat
     ET.SubElement(tags, "tag").text = "generated"
     ET.SubElement(tags, "tag").text = "fritzing"
 
-    ET.SubElement(module, "properties")
+    properties = ET.SubElement(module, "properties")
+    ET.SubElement(properties, "property", {"name": "family"}).text = safe_family
+    ET.SubElement(properties, "property", {"name": "type"}).text = safe_type
 
     views = ET.SubElement(module, "views")
     for view_name, layer_ids, image_name in (
@@ -1028,12 +1045,19 @@ def write_fritzing_part_fzp(
     connector_model: dict,
     out_dir: Path,
     part_basename: str = "generated_part",
+    part_family: str = "KiCad2Fritzing Generated",
+    part_type: str = "Custom PCB",
 ) -> Path:
     """Write a minimal generated Fritzing .fzp part file."""
     out_dir.mkdir(parents=True, exist_ok=True)
     safe_basename = _sanitize_part_basename(part_basename)
     output_file = out_dir / f"{safe_basename}.fzp"
-    fzp_xml = build_fritzing_part_fzp(connector_model, part_basename=safe_basename)
+    fzp_xml = build_fritzing_part_fzp(
+        connector_model,
+        part_basename=safe_basename,
+        part_family=part_family,
+        part_type=part_type,
+    )
     output_file.write_text(fzp_xml, encoding="utf-8")
     return output_file
 
@@ -1406,6 +1430,8 @@ def export_board_to_fritzing_stub(
     out_dir: Path,
     part_name: str | None = None,
     render_options: dict | None = None,
+    part_family: str = "KiCad2Fritzing Generated",
+    part_type: str = "Custom PCB",
 ) -> Path:
     """Create a placeholder conversion output for initial project wiring.
     
@@ -1432,7 +1458,13 @@ def export_board_to_fritzing_stub(
     write_board_model_json(model, out_dir)
     connector_model = map_model_to_fritzing_connectors(model)
     write_fritzing_connector_model_json(connector_model, out_dir)
-    write_fritzing_part_fzp(connector_model, out_dir, part_basename=part_basename)
+    write_fritzing_part_fzp(
+        connector_model,
+        out_dir,
+        part_basename=part_basename,
+        part_family=part_family,
+        part_type=part_type,
+    )
     write_placeholder_svg_views(
         connector_model,
         out_dir,
