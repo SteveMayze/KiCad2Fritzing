@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import json
 import os
 import re
 from xml.etree import ElementTree as ET
@@ -223,6 +224,22 @@ def plot_kicad_svg_layers(board, out_dir: Path) -> dict[str, Path]:
     return plotted
 
 
+def write_overlay_mode_marker(
+    out_dir: Path,
+    requested_native_overlay: bool,
+    applied_native_overlay: bool,
+) -> Path:
+    """Write a small marker file describing how silkscreen overlay was produced."""
+    marker_path = out_dir / "k2f_overlay_mode.json"
+    marker_payload = {
+        "requested_native_overlay": requested_native_overlay,
+        "applied_native_overlay": applied_native_overlay,
+        "effective_mode": "kicad_native" if applied_native_overlay else "custom_fallback",
+    }
+    marker_path.write_text(json.dumps(marker_payload, indent=2), encoding="utf-8")
+    return marker_path
+
+
 class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
     """Dialog for KiCad2Fritzing part generation settings."""
 
@@ -333,6 +350,11 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
             # Fallback if wxPython unavailable
             out_dir = board_path.parent / "fritzing-part"
             export_board_to_fritzing_stub(board_path, out_dir)
+            write_overlay_mode_marker(
+                out_dir,
+                requested_native_overlay=False,
+                applied_native_overlay=False,
+            )
             return
         
         dlg = KiCad2FritzingDialog(None, board_path)
@@ -347,13 +369,22 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
             try:
                 export_board_to_fritzing_stub(board_path, out_dir, part_name=part_name)
 
+                native_overlay_applied = False
+
                 if use_kicad_native_overlay:
                     plotted = plot_kicad_svg_layers(board, out_dir / "kicad_svg_plots")
-                    overlay_kicad_plots_on_breadboard(
+                    overlaid_path = overlay_kicad_plots_on_breadboard(
                         out_dir,
                         plotted,
                         replace_custom_silkscreen=True,
                     )
+                    native_overlay_applied = overlaid_path is not None
+
+                write_overlay_mode_marker(
+                    out_dir,
+                    requested_native_overlay=use_kicad_native_overlay,
+                    applied_native_overlay=native_overlay_applied,
+                )
             finally:
                 # Restore previous text scaling environment state.
                 if previous_text_scale is None:
