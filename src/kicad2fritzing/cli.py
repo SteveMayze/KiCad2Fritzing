@@ -6,7 +6,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from kicad2fritzing.core.extractor import export_board_to_fritzing_stub
+from kicad2fritzing.core.extractor import build_fritzing_package_zip, export_board_to_fritzing_stub
 from kicad2fritzing.kicad.plugin import embed_3d_render_in_breadboard_svg, render_board_3d
 
 
@@ -93,6 +93,10 @@ def main() -> int:
         if render_png:
             embed_3d_render_in_breadboard_svg(args.out_dir, render_png)
             logging.info("Embedded 3D render: %s", render_png)
+            # Rebuild fzpz so Fritzing loads the version with the embedded render.
+            fzp_files = list(args.out_dir.glob("*.fzp"))
+            if fzp_files:
+                build_fritzing_package_zip(args.out_dir, part_basename=fzp_files[0].stem)
         else:
             logging.warning("3D render failed or kicad-cli not found; breadboard SVG unchanged")
 

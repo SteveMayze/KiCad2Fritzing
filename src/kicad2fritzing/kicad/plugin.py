@@ -12,7 +12,7 @@ import subprocess
 from xml.etree import ElementTree as ET
 from pathlib import Path
 
-from kicad2fritzing.core.extractor import export_board_to_fritzing_stub
+from kicad2fritzing.core.extractor import build_fritzing_package_zip, export_board_to_fritzing_stub
 
 try:
     import pcbnew  # type: ignore
@@ -291,8 +291,9 @@ def render_board_3d(
     if cli is None:
         return None
 
+    board_file = board_file.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    render_path = out_dir / "board_render.png"
+    render_path = (out_dir / "board_render.png").resolve()
 
     # Compute pixel dimensions matching the board aspect ratio so we can
     # later use preserveAspectRatio="none" for a pixel-perfect fit.
@@ -317,7 +318,7 @@ def render_board_3d(
         str(board_file),
     ]
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=120)
+        result = subprocess.run(cmd, capture_output=True, timeout=120, cwd=str(board_file.parent))
         if result.returncode == 0 and render_path.exists():
             return render_path
     except Exception:  # noqa: BLE001
@@ -840,7 +841,15 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
                 )
                 if render_png:
                     embed_3d_render_in_breadboard_svg(out_dir, render_png)
-        
+
+            # Rebuild the .fzpz with the fully-decorated breadboard.svg so that
+            # Fritzing loads the version that includes the native overlay and/or
+            # 3D render.  The initial fzpz is built inside export_board_to_fritzing_stub
+            # before any post-processing, so this call overwrites it with a fresh copy.
+            fzp_files = list(out_dir.glob("*.fzp"))
+            if fzp_files:
+                build_fritzing_package_zip(out_dir, part_basename=fzp_files[0].stem)
+
         dlg.Destroy()
 
 
