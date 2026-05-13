@@ -76,11 +76,37 @@ def _board_outline_bounds(svg_root: ET.Element) -> tuple[float, float, float, fl
     return (min_x, min_y, max_x - min_x, max_y - min_y)
 
 
-def overlay_kicad_plots_on_breadboard(out_dir: Path, plotted: dict[str, Path]) -> Path | None:
+def _remove_custom_silkscreen_elements(svg_root: ET.Element) -> None:
+    """Remove custom generated silkscreen primitives from breadboard SVG.
+
+    Current custom silkscreen uses a light foreground color. When KiCad-native
+    silkscreen is enabled we remove these primitives to avoid duplicate text/
+    line overlays.
+    """
+
+    def should_remove(elem: ET.Element) -> bool:
+        stroke = elem.attrib.get("stroke", "").lower()
+        fill = elem.attrib.get("fill", "").lower()
+        return stroke == "#f5f5f5" or fill == "#f5f5f5"
+
+    def recurse(parent: ET.Element) -> None:
+        for child in list(parent):
+            recurse(child)
+            if should_remove(child):
+                parent.remove(child)
+
+    recurse(svg_root)
+
+
+def overlay_kicad_plots_on_breadboard(
+    out_dir: Path,
+    plotted: dict[str, Path],
+    replace_custom_silkscreen: bool = True,
+) -> Path | None:
     """Overlay KiCad-plotted SVG content on generated breadboard SVG.
 
-    This is a spike path for comparing KiCad-native silkscreen/outline fidelity
-    with the current custom-generated geometry.
+    This supports KiCad-native silkscreen as the default path while retaining
+    fallback behavior to custom rendering when disabled.
     """
     breadboard_svg_path = out_dir / "breadboard.svg"
     if not breadboard_svg_path.exists():
@@ -119,6 +145,9 @@ def overlay_kicad_plots_on_breadboard(out_dir: Path, plotted: dict[str, Path]) -
     for elem in list(target_root):
         if elem.attrib.get("id") == "kicadNativeOverlay":
             target_root.remove(elem)
+
+    if replace_custom_silkscreen:
+        _remove_custom_silkscreen_elements(target_root)
 
     overlay_group = ET.Element(
         f"{{{SVG_NS}}}g",
@@ -202,7 +231,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         if wx is None:
             raise RuntimeError("wxPython not available")
         
-        wx.Dialog.__init__(self, parent, title="KiCad2Fritzing Part Generation", size=(550, 280))
+        wx.Dialog.__init__(self, parent, title="KiCad2Fritzing Part Generation", size=(620, 360))
         self.board_path = board_path
         
         # Panel setup
@@ -243,6 +272,14 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         scale_sizer.Add(scale_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
         scale_sizer.Add(self.scale_input, 1, wx.EXPAND)
         sizer.Add(scale_sizer, 0, wx.ALL | wx.EXPAND, 10)
+
+        # KiCad-native silkscreen toggle (default on for alpha/beta diagnostics)
+        self.use_kicad_native_overlay = wx.CheckBox(
+            panel,
+            label="Use KiCad-native silkscreen overlay (recommended)",
+        )
+        self.use_kicad_native_overlay.SetValue(True)
+        sizer.Add(self.use_kicad_native_overlay, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         
         # Buttons
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -266,15 +303,16 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             self.dir_input.SetValue(dlg.GetPath())
         dlg.Destroy()
     
-    def get_values(self) -> tuple[str, Path, float]:
-        """Return (part_name, out_dir, text_scale) from dialog inputs."""
+    def get_values(self) -> tuple[str, Path, float, bool]:
+        """Return (part_name, out_dir, text_scale, use_kicad_native_overlay)."""
         part_name = self.part_name_input.GetValue()
         out_dir = Path(self.dir_input.GetValue())
         try:
             text_scale = float(self.scale_input.GetValue())
         except ValueError:
             text_scale = 1.15
-        return part_name, out_dir, text_scale
+        use_kicad_native_overlay = bool(self.use_kicad_native_overlay.GetValue())
+        return part_name, out_dir, text_scale, use_kicad_native_overlay
 
 
 class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
@@ -299,7 +337,7 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
         
         dlg = KiCad2FritzingDialog(None, board_path)
         if dlg.ShowModal() == wx.ID_OK:
-            part_name, out_dir, text_scale = dlg.get_values()
+            part_name, out_dir, text_scale, use_kicad_native_overlay = dlg.get_values()
             out_dir.mkdir(parents=True, exist_ok=True)
             
             # Set text scaling as environment variable
@@ -309,9 +347,13 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
             try:
                 export_board_to_fritzing_stub(board_path, out_dir, part_name=part_name)
 
-                # Spike artifact: KiCad-native SVG plots for silkscreen/outline comparison.
-                plotted = plot_kicad_svg_layers(board, out_dir / "kicad_svg_plots")
-                overlay_kicad_plots_on_breadboard(out_dir, plotted)
+                if use_kicad_native_overlay:
+                    plotted = plot_kicad_svg_layers(board, out_dir / "kicad_svg_plots")
+                    overlay_kicad_plots_on_breadboard(
+                        out_dir,
+                        plotted,
+                        replace_custom_silkscreen=True,
+                    )
             finally:
                 # Restore previous text scaling environment state.
                 if previous_text_scale is None:
