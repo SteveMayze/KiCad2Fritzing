@@ -31,12 +31,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--include-component-silkscreen",
         action="store_true",
-        help="Include component footprint silkscreen (outlines and labels) in generated SVG views",
+        help="Include component footprint silkscreen (outlines and labels) in generated SVG views (mainly for non-3D exports)",
     )
     parser.add_argument(
         "--include-fab-layer",
         action="store_true",
-        help="Include component body layer (F.Fab) outlines in generated SVG views",
+        help="Include component body layer (F.Fab) outlines in generated SVG views (mainly for non-3D exports)",
     )
     parser.add_argument(
         "--render-3d",

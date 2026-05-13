@@ -498,6 +498,13 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         metadata_sizer.Add(self.part_type_input, 1)
         sizer.Add(metadata_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
 
+        # Advanced 2D silkscreen/body options
+        self.silkscreen_options_label = wx.StaticText(
+            panel,
+            label="Advanced 2D overlays (optional):",
+        )
+        sizer.Add(self.silkscreen_options_label, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 2)
+
         # Silkscreen options
         silkscreen_sizer = wx.BoxSizer(wx.VERTICAL)
         self.include_component_silkscreen = wx.CheckBox(
@@ -537,6 +544,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         kicad_cli_sizer.Add(self.kicad_cli_detect_btn, 0)
         sizer.Add(kicad_cli_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
         self._sync_3d_render_controls()
+        self._sync_advanced_overlay_controls()
         
         # Render colors
         color_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -678,6 +686,18 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         self.kicad_cli_path_input.Enable(enabled)
         self.kicad_cli_detect_btn.Enable(enabled)
 
+    def _sync_advanced_overlay_controls(self) -> None:
+        """Disable 2D overlay options while 3D render mode is enabled."""
+        using_3d = bool(self.use_3d_render.GetValue())
+        enable_2d_options = not using_3d
+        self.silkscreen_options_label.Enable(enable_2d_options)
+        self.include_component_silkscreen.Enable(enable_2d_options)
+        self.include_fab_layer.Enable(enable_2d_options)
+        if using_3d:
+            # Keep 3D mode visually clean and avoid accidental mixed-mode exports.
+            self.include_component_silkscreen.SetValue(False)
+            self.include_fab_layer.SetValue(False)
+
     def _on_native_overlay_toggle(self, event) -> None:
         """Update control state when native-overlay checkbox changes."""
         self._sync_text_scaling_controls()
@@ -686,6 +706,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
     def _on_3d_render_toggle(self, event) -> None:
         """Update control state when 3D render checkbox changes."""
         self._sync_3d_render_controls()
+        self._sync_advanced_overlay_controls()
         event.Skip()
 
     def _on_detect_kicad_cli(self, event) -> None:
