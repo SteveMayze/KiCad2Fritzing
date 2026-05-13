@@ -78,18 +78,19 @@ def _board_outline_bounds(svg_root: ET.Element) -> tuple[float, float, float, fl
     return (min_x, min_y, max_x - min_x, max_y - min_y)
 
 
-def _remove_custom_silkscreen_elements(svg_root: ET.Element) -> None:
+def _remove_custom_silkscreen_elements(svg_root: ET.Element, silkscreen_color: str = "#f5f5f5") -> None:
     """Remove custom generated silkscreen primitives from breadboard SVG.
 
     Current custom silkscreen uses a light foreground color. When KiCad-native
     silkscreen is enabled we remove these primitives to avoid duplicate text/
     line overlays.
     """
+    color_lower = silkscreen_color.lower()
 
     def should_remove(elem: ET.Element) -> bool:
         stroke = elem.attrib.get("stroke", "").lower()
         fill = elem.attrib.get("fill", "").lower()
-        return stroke == "#f5f5f5" or fill == "#f5f5f5"
+        return stroke == color_lower or fill == color_lower
 
     def recurse(parent: ET.Element) -> None:
         for child in list(parent):
@@ -104,6 +105,7 @@ def overlay_kicad_plots_on_breadboard(
     out_dir: Path,
     plotted: dict[str, Path],
     replace_custom_silkscreen: bool = True,
+    silkscreen_color: str = "#f5f5f5",
 ) -> Path | None:
     """Overlay KiCad-plotted SVG content on generated breadboard SVG.
 
@@ -149,7 +151,7 @@ def overlay_kicad_plots_on_breadboard(
             target_root.remove(elem)
 
     if replace_custom_silkscreen:
-        _remove_custom_silkscreen_elements(target_root)
+        _remove_custom_silkscreen_elements(target_root, silkscreen_color)
 
     overlay_group = ET.Element(
         f"{{{SVG_NS}}}g",
@@ -263,12 +265,23 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         # Panel setup
         panel = wx.Panel(self)
         sizer = wx.BoxSizer(wx.VERTICAL)
-        
+
+        # Compute default output dir value: blank if non-existent, relative+sep if inside project
+        _default_out = board_path.parent / "fritzing-part"
+        if _default_out.exists():
+            try:
+                _rel = os.path.relpath(_default_out, board_path.parent)
+                _dir_default = _rel + os.sep
+            except ValueError:
+                _dir_default = str(_default_out) + os.sep
+        else:
+            _dir_default = ""
+
         # Directory
         dir_label = wx.StaticText(panel, label="Output Directory:")
         self.dir_input = wx.TextCtrl(
             panel,
-            value=str(board_path.parent / "fritzing-part"),
+            value=_dir_default,
             size=(350, -1)
         )
         browse_icon = wx.ArtProvider.GetBitmap(wx.ART_FOLDER_OPEN, wx.ART_BUTTON, (16, 16))
@@ -348,7 +361,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
 
         self.custom_options_hint = wx.StaticText(
             panel,
-            label="Silkscreen color and text scaling apply only to custom silkscreen rendering.",
+            label="Text scaling applies only to custom silkscreen rendering.",
         )
         sizer.Add(self.custom_options_hint, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
@@ -373,7 +386,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             self,
             "Choose output directory",
             defaultPath=default_path,
-            style=wx.DD_DEFAULT_STYLE | wx.DD_DIR_MUST_EXIST
+            style=wx.DD_DEFAULT_STYLE | wx.DD_NEW_DIR_BUTTON,
         )
         if dlg.ShowModal() == wx.ID_OK:
             chosen = Path(dlg.GetPath()).resolve()
@@ -386,12 +399,12 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
                     wx.YES_NO | wx.ICON_QUESTION,
                 )
                 if prompt.ShowModal() == wx.ID_YES:
-                    self.dir_input.SetValue(relative_path)
+                    self.dir_input.SetValue(relative_path + os.sep)
                 else:
-                    self.dir_input.SetValue(str(chosen))
+                    self.dir_input.SetValue(str(chosen) + os.sep)
                 prompt.Destroy()
             else:
-                self.dir_input.SetValue(str(chosen))
+                self.dir_input.SetValue(str(chosen) + os.sep)
         dlg.Destroy()
 
     def _is_within_project_dir(self, path: Path) -> bool:
@@ -404,7 +417,10 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
 
     def _resolve_output_dir(self, raw_path: str) -> Path:
         """Resolve user-entered output path, supporting project-relative notation."""
-        path = Path(raw_path).expanduser()
+        stripped = raw_path.strip().rstrip("/\\")
+        if not stripped:
+            return self.project_dir
+        path = Path(stripped).expanduser()
         if path.is_absolute():
             return path
         return (self.project_dir / path).resolve()
@@ -433,12 +449,10 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             )
 
     def _sync_text_scaling_controls(self) -> None:
-        """Enable custom silkscreen controls only when native overlay is disabled."""
+        """Enable custom text-scaling controls only when native overlay is disabled."""
         enable_custom_controls = not bool(self.use_kicad_native_overlay.GetValue())
         self.scale_input.Enable(enable_custom_controls)
         self.scale_label.Enable(enable_custom_controls)
-        self.silkscreen_color_input.Enable(enable_custom_controls)
-        self.silkscreen_color_label.Enable(enable_custom_controls)
 
     def _on_native_overlay_toggle(self, event) -> None:
         """Update control state when native-overlay checkbox changes."""
@@ -536,6 +550,7 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
                     out_dir,
                     plotted,
                     replace_custom_silkscreen=True,
+                    silkscreen_color=silkscreen_color,
                 )
                 native_overlay_applied = overlaid_path is not None
 
