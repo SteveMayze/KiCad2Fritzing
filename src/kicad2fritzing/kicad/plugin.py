@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import copy
 import os
+import re
+from xml.etree import ElementTree as ET
 from pathlib import Path
 
 from kicad2fritzing.core.extractor import export_board_to_fritzing_stub
@@ -13,6 +16,182 @@ try:
 except ImportError:  # pragma: no cover
     pcbnew = None
     wx = None
+
+
+SVG_NS = "http://www.w3.org/2000/svg"
+NUMERIC_PREFIX_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
+
+
+def _parse_svg_number(value: str | None) -> float | None:
+    if not value:
+        return None
+    match = NUMERIC_PREFIX_RE.search(value)
+    if not match:
+        return None
+    return float(match.group(0))
+
+
+def _svg_canvas_bounds(svg_root: ET.Element) -> tuple[float, float, float, float] | None:
+    view_box = svg_root.attrib.get("viewBox")
+    if view_box:
+        parts = [p for p in re.split(r"[\s,]+", view_box.strip()) if p]
+        if len(parts) == 4:
+            min_x, min_y, width, height = [float(p) for p in parts]
+            if width > 0 and height > 0:
+                return (min_x, min_y, width, height)
+
+    width = _parse_svg_number(svg_root.attrib.get("width"))
+    height = _parse_svg_number(svg_root.attrib.get("height"))
+    if width and height and width > 0 and height > 0:
+        return (0.0, 0.0, width, height)
+
+    return None
+
+
+def _board_outline_bounds(svg_root: ET.Element) -> tuple[float, float, float, float] | None:
+    board_outline = None
+    for elem in svg_root.iter():
+        if elem.attrib.get("id") == "boardOutline":
+            board_outline = elem
+            break
+
+    if board_outline is None:
+        return None
+
+    points_attr = board_outline.attrib.get("points", "")
+    points: list[tuple[float, float]] = []
+    for pair in points_attr.strip().split():
+        if "," not in pair:
+            continue
+        x_str, y_str = pair.split(",", 1)
+        points.append((float(x_str), float(y_str)))
+
+    if not points:
+        return None
+
+    min_x = min(x for x, _ in points)
+    max_x = max(x for x, _ in points)
+    min_y = min(y for _, y in points)
+    max_y = max(y for _, y in points)
+    return (min_x, min_y, max_x - min_x, max_y - min_y)
+
+
+def overlay_kicad_plots_on_breadboard(out_dir: Path, plotted: dict[str, Path]) -> Path | None:
+    """Overlay KiCad-plotted SVG content on generated breadboard SVG.
+
+    This is a spike path for comparing KiCad-native silkscreen/outline fidelity
+    with the current custom-generated geometry.
+    """
+    breadboard_svg_path = out_dir / "breadboard.svg"
+    if not breadboard_svg_path.exists():
+        return None
+
+    overlay_sources = [
+        plotted.get("edge_cuts"),
+        plotted.get("f_silks"),
+    ]
+    overlay_sources = [p for p in overlay_sources if p and p.exists()]
+    if not overlay_sources:
+        return None
+
+    ET.register_namespace("", SVG_NS)
+    target_tree = ET.parse(breadboard_svg_path)
+    target_root = target_tree.getroot()
+
+    board_bounds = _board_outline_bounds(target_root)
+    if board_bounds is None:
+        return None
+
+    anchor_tree = ET.parse(overlay_sources[0])
+    anchor_bounds = _svg_canvas_bounds(anchor_tree.getroot())
+    if anchor_bounds is None:
+        return None
+
+    target_x, target_y, target_w, target_h = board_bounds
+    source_x, source_y, source_w, source_h = anchor_bounds
+    if source_w <= 0 or source_h <= 0:
+        return None
+
+    scale = min(target_w / source_w, target_h / source_h)
+    tx = target_x - (source_x * scale) + ((target_w - (source_w * scale)) / 2.0)
+    ty = target_y - (source_y * scale) + ((target_h - (source_h * scale)) / 2.0)
+
+    for elem in list(target_root):
+        if elem.attrib.get("id") == "kicadNativeOverlay":
+            target_root.remove(elem)
+
+    overlay_group = ET.Element(
+        f"{{{SVG_NS}}}g",
+        {
+            "id": "kicadNativeOverlay",
+            "transform": f"translate({tx:.3f},{ty:.3f}) scale({scale:.6f})",
+            "opacity": "0.95",
+        },
+    )
+
+    for source_path in overlay_sources:
+        source_tree = ET.parse(source_path)
+        source_root = source_tree.getroot()
+        subgroup = ET.SubElement(
+            overlay_group,
+            f"{{{SVG_NS}}}g",
+            {"id": f"kicad_{source_path.stem}"},
+        )
+        for child in list(source_root):
+            if child.tag.endswith("metadata") or child.tag.endswith("title"):
+                continue
+            subgroup.append(copy.deepcopy(child))
+
+    target_root.append(overlay_group)
+    target_tree.write(breadboard_svg_path, encoding="utf-8", xml_declaration=False)
+    return breadboard_svg_path
+
+
+def plot_kicad_svg_layers(board, out_dir: Path) -> dict[str, Path]:
+    """Plot KiCad-native SVG layers for comparison and future integration.
+
+    This spike helper exports KiCad's own SVG for selected layers so we can
+    evaluate fidelity against the custom renderer.
+    """
+    if pcbnew is None:
+        return {}
+
+    out_dir.mkdir(parents=True, exist_ok=True)
+    plot_ctrl = pcbnew.PLOT_CONTROLLER(board)
+    plot_opts = plot_ctrl.GetPlotOptions()
+
+    plot_opts.SetOutputDirectory(str(out_dir))
+    plot_opts.SetPlotFrameRef(False)
+    plot_opts.SetMirror(False)
+    plot_opts.SetNegative(False)
+    plot_opts.SetUseAuxOrigin(False)
+    plot_opts.SetFormat(pcbnew.PLOT_FORMAT_SVG)
+
+    if hasattr(plot_opts, "SetSvgPrecision"):
+        # KiCad Python API signature varies by version.
+        # Some builds accept (precision, useInch), others only (precision).
+        try:
+            plot_opts.SetSvgPrecision(4, False)
+        except TypeError:
+            plot_opts.SetSvgPrecision(4)
+    if hasattr(plot_opts, "SetTextMode") and hasattr(pcbnew, "PLOT_TEXT_MODE_DEFAULT"):
+        plot_opts.SetTextMode(pcbnew.PLOT_TEXT_MODE_DEFAULT)
+
+    plotted: dict[str, Path] = {}
+    target_layers = (
+        ("f_silks", pcbnew.F_SilkS, "Front Silkscreen"),
+        ("edge_cuts", pcbnew.Edge_Cuts, "Board Outline"),
+    )
+
+    for key, layer_id, description in target_layers:
+        plot_ctrl.SetLayer(layer_id)
+        if not plot_ctrl.OpenPlotfile(key, pcbnew.PLOT_FORMAT_SVG, description):
+            continue
+        if plot_ctrl.PlotLayer():
+            plotted[key] = Path(str(plot_ctrl.GetPlotFileName()))
+
+    plot_ctrl.ClosePlot()
+    return plotted
 
 
 class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
@@ -124,13 +303,21 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
             out_dir.mkdir(parents=True, exist_ok=True)
             
             # Set text scaling as environment variable
+            previous_text_scale = os.environ.get("K2F_SILK_TEXT_SCALE")
             os.environ["K2F_SILK_TEXT_SCALE"] = str(text_scale)
             
             try:
                 export_board_to_fritzing_stub(board_path, out_dir, part_name=part_name)
+
+                # Spike artifact: KiCad-native SVG plots for silkscreen/outline comparison.
+                plotted = plot_kicad_svg_layers(board, out_dir / "kicad_svg_plots")
+                overlay_kicad_plots_on_breadboard(out_dir, plotted)
             finally:
-                # Restore default text scaling
-                os.environ["K2F_SILK_TEXT_SCALE"] = "1.15"
+                # Restore previous text scaling environment state.
+                if previous_text_scale is None:
+                    os.environ.pop("K2F_SILK_TEXT_SCALE", None)
+                else:
+                    os.environ["K2F_SILK_TEXT_SCALE"] = previous_text_scale
         
         dlg.Destroy()
 
