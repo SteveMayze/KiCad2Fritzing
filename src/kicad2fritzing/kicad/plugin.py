@@ -271,10 +271,24 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             value=str(board_path.parent / "fritzing-part"),
             size=(350, -1)
         )
-        self.browse_btn = wx.Button(panel, label="Browse", size=(80, -1))
-        self.open_dir_btn = wx.Button(panel, label="Open", size=(80, -1))
+        browse_icon = wx.ArtProvider.GetBitmap(wx.ART_FOLDER_OPEN, wx.ART_BUTTON, (16, 16))
+        open_icon = wx.ArtProvider.GetBitmap(wx.ART_FILE_OPEN, wx.ART_BUTTON, (16, 16))
+
+        if browse_icon.IsOk():
+            self.browse_btn = wx.BitmapButton(panel, bitmap=browse_icon, size=(34, 30))
+        else:
+            self.browse_btn = wx.Button(panel, label="Browse", size=(80, -1))
+
+        if open_icon.IsOk():
+            self.open_dir_btn = wx.BitmapButton(panel, bitmap=open_icon, size=(34, 30))
+        else:
+            self.open_dir_btn = wx.Button(panel, label="Open", size=(80, -1))
+
+        self.browse_btn.SetToolTip("Choose output directory")
+        self.open_dir_btn.SetToolTip("Open output directory in file manager")
         self.browse_btn.Bind(wx.EVT_BUTTON, self._on_browse)
         self.open_dir_btn.Bind(wx.EVT_BUTTON, self._on_open_output_dir)
+
         dir_sizer = wx.BoxSizer(wx.HORIZONTAL)
         dir_sizer.Add(dir_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
         dir_sizer.Add(self.dir_input, 1, wx.EXPAND | wx.RIGHT, 5)
