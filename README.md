@@ -19,6 +19,8 @@ Current status:
 - Supported Edge.Cuts primitives now include `gr_rect`, `gr_line`, `gr_poly`, and `gr_arc`.
 - Artifact consistency validation checks connector IDs across generated files.
 - **Generated `.fzpz` packages** are ready for import directly into Fritzing.
+- Generated `.fzp` metadata now includes non-empty `family` and `type` properties (required by Fritzing local parts indexing).
+- KiCad plugin dialog exposes user-editable **Part Family** and **Part Type** fields with safe defaults.
 - Reference artifacts are organized under `references/`.
 
 ## Repository Layout
@@ -63,6 +65,12 @@ It also writes a starter Fritzing part file named after the board, e.g. `my-boar
 It also writes placeholder SVG view files: `icon.svg`, `breadboard.svg`, `schematic.svg`, `pcb.svg`.
 It writes a validation report: `artifact_validation.json`.
 It writes a shareable package named after the board, e.g. `my-board.fzpz`.
+
+Fritzing metadata fields can be customized from the KiCad plugin dialog:
+- `Part Family` (default: `KiCad2Fritzing Generated`)
+- `Part Type` (default: `Custom PCB`)
+
+These values are written into the generated `.fzp` under `<properties>` and influence how Fritzing categorizes and indexes the part.
 
 ## KiCad Extension Direction
 
@@ -145,3 +153,9 @@ Useful optional variables:
 Rendering tuning:
 - `K2F_SILK_TEXT_SCALE` adjusts silkscreen text size in generated SVGs (default `1.15`).
 	Example: `K2F_SILK_TEXT_SCALE=1.22` for slightly larger board labels.
+
+## Fritzing Import Notes
+
+- If you previously imported early generated parts and see startup warnings from Fritzing local parts scanning, remove stale `kicad2fritzing.*` entries from:
+  - `~/Library/Application Support/Fritzing/Fritzing/local_parts/user/`
+- Re-import a newly generated `.fzpz` from this version to refresh metadata with required `family/type` properties.

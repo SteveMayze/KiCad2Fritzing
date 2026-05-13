@@ -28,13 +28,15 @@
 - Added regression tests for silkscreen parsing/rendering, coordinate projection, filtering, and SVG sizing.
 - Added `requirements.txt` dependency list.
 - Added opt-in external repository integration testing (clone at test time, parse/generate/validate, no project copy in this repo).
+- Added plugin output-directory UX improvements (create-directory browse, project-relative defaults, OS separator suffix behavior).
+- Added render-option controls for soldermask/silkscreen color and pad scaling in plugin dialog.
+- Added Fritzing metadata safeguards: generated `.fzp` now includes non-empty `family` and `type` properties.
+- Added plugin dialog controls for user-defined Part Family and Part Type with defaults.
+- Added regression tests for `.fzp` family/type defaults and override behavior.
 
 ## Current Focus
 
-- Return to the original conversion path with stable baseline behavior:
-	- keep current silkscreen support as-is (no vector path text conversion),
-	- investigate compatibility issues seen on another board,
-	- improve parser robustness without adding optional rendering complexity.
+- Keep stabilizing cross-tool compatibility (KiCad export -> Fritzing import) with guardrail tests and small iterative UX fixes.
 
 ## Next Steps
 
@@ -47,6 +49,7 @@
 	- assess whether this can replace manual text scaling and simplify silkscreen handling.
 - Validate connector IDs/names/mappings on at least two real board designs.
 - Validate generated `.fzp` schema assumptions against actual Fritzing import behavior.
+- Add optional CLI flags for `--part-family` and `--part-type` parity with plugin dialog metadata controls.
 - Add round-trip checks using Fritzing import/export where practical.
 - Add tests around plugin behavior and end-to-end integration flow.
 - Refine the KiCad plugin dialog UX after the updated Balsamiq draft is ready:
