@@ -284,6 +284,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         
         # Text Scaling
         scale_label = wx.StaticText(panel, label="Text Scaling:")
+        self.scale_label = scale_label
         self.scale_input = wx.TextCtrl(panel, value="1.15", size=(400, -1))
         scale_sizer = wx.BoxSizer(wx.HORIZONTAL)
         scale_sizer.Add(scale_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
@@ -296,7 +297,11 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             label="Use KiCad-native silkscreen overlay (recommended)",
         )
         self.use_kicad_native_overlay.SetValue(True)
+        self.use_kicad_native_overlay.Bind(wx.EVT_CHECKBOX, self._on_native_overlay_toggle)
         sizer.Add(self.use_kicad_native_overlay, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # Native overlay bypasses custom text scaling; disable to avoid confusion.
+        self._sync_text_scaling_controls()
         
         # Buttons
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
@@ -319,6 +324,17 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         if dlg.ShowModal() == wx.ID_OK:
             self.dir_input.SetValue(dlg.GetPath())
         dlg.Destroy()
+
+    def _sync_text_scaling_controls(self) -> None:
+        """Enable text-scaling input only for custom silkscreen rendering."""
+        enable_scale_controls = not bool(self.use_kicad_native_overlay.GetValue())
+        self.scale_input.Enable(enable_scale_controls)
+        self.scale_label.Enable(enable_scale_controls)
+
+    def _on_native_overlay_toggle(self, event) -> None:
+        """Update control state when native-overlay checkbox changes."""
+        self._sync_text_scaling_controls()
+        event.Skip()
     
     def get_values(self) -> tuple[str, Path, float, bool]:
         """Return (part_name, out_dir, text_scale, use_kicad_native_overlay)."""
