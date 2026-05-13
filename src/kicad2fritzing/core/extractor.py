@@ -55,6 +55,7 @@ DEFAULT_RENDER_OPTIONS = {
     "pad_scale": 1.0,
     "silk_text_scale": 1.15,
     "include_component_silkscreen": False,
+    "include_fab_layer": False,
 }
 
 
@@ -110,6 +111,12 @@ def _resolve_render_options(render_options: dict | None) -> dict:
         3.0,
     )
 
+    include_fab = options.get("include_fab_layer")
+    if isinstance(include_fab, str):
+        options["include_fab_layer"] = include_fab.lower() in ("true", "1", "yes")
+    else:
+        options["include_fab_layer"] = bool(include_fab)
+
     return options
 
 
@@ -145,6 +152,11 @@ def _is_edge_cuts_block(block_text: str) -> bool:
 def _is_front_silks_block(block_text: str) -> bool:
     layer_match = LAYER_RE.search(block_text)
     return bool(layer_match and layer_match.group(1) == "F.SilkS")
+
+
+def _is_front_fab_block(block_text: str) -> bool:
+    layer_match = LAYER_RE.search(block_text)
+    return bool(layer_match and layer_match.group(1) == "F.Fab")
 
 
 def _decode_kicad_text(text: str) -> str:
@@ -290,6 +302,48 @@ def _render_svg_silkscreen(
             f'fill="{color}" text-anchor="{text_anchor}" dominant-baseline="{dominant_baseline}" opacity="0.96"{transform}>'
             + "".join(tspans)
             + '</text>'
+        )
+
+    return "".join(parts)
+
+
+def _render_svg_fab_layer(
+    board_model: dict | None,
+    bounds: tuple[float, float, float, float],
+    width: int,
+    height: int,
+    margin: int,
+    scale: float,
+    color: str,
+) -> str:
+    fab_layer = (board_model or {}).get("fab_layer", {})
+    parts: list[str] = []
+
+    for polygon in fab_layer.get("polygons", []):
+        points_mm = polygon.get("points_mm", [])
+        if len(points_mm) < 3:
+            continue
+        projected = [
+            _project_mm_to_svg(float(pt["x"]), float(pt["y"]), bounds, height, margin, scale)
+            for pt in points_mm
+        ]
+        points_attr = " ".join(f"{x},{y}" for x, y in projected)
+        parts.append(
+            f'<polygon points="{points_attr}" fill="none" stroke="{color}" '
+            f'stroke-width="0.8" opacity="0.75"/>'
+        )
+
+    for line in fab_layer.get("lines", []):
+        start = line.get("start_mm")
+        end = line.get("end_mm")
+        if not start or not end:
+            continue
+        x1, y1 = _project_mm_to_svg(float(start["x"]), float(start["y"]), bounds, height, margin, scale)
+        x2, y2 = _project_mm_to_svg(float(end["x"]), float(end["y"]), bounds, height, margin, scale)
+        stroke_width = max(0.5, round(float(line.get("stroke_width_mm", 0.1)) * scale, 3))
+        parts.append(
+            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" '
+            f'stroke="{color}" stroke-width="{stroke_width}" stroke-linecap="round" opacity="0.75"/>'
         )
 
     return "".join(parts)
@@ -507,7 +561,11 @@ def _scaled_pad_radius(
     return round(max(0.4, min(max_radius * 2.0, adjusted)), 3)
 
 
-def parse_kicad_board_to_model(board_file: Path, include_component_silkscreen: bool = False) -> dict:
+def parse_kicad_board_to_model(
+    board_file: Path,
+    include_component_silkscreen: bool = False,
+    include_fab_layer: bool = False,
+) -> dict:
     """Parse a KiCad PCB file into a small intermediate model for conversion."""
     text = board_file.read_text(encoding="utf-8")
     lines = text.splitlines()
@@ -519,6 +577,8 @@ def parse_kicad_board_to_model(board_file: Path, include_component_silkscreen: b
     silkscreen_texts: list[dict] = []
     silkscreen_lines: list[dict] = []
     silkscreen_polygons: list[dict] = []
+    fab_layer_lines: list[dict] = []
+    fab_layer_polygons: list[dict] = []
 
     for line in lines:
         stripped = line.strip()
@@ -671,6 +731,8 @@ def parse_kicad_board_to_model(board_file: Path, include_component_silkscreen: b
         footprint_silkscreen_texts: list[dict] = []
         footprint_silkscreen_lines: list[dict] = []
         footprint_silkscreen_polygons: list[dict] = []
+        footprint_fab_lines: list[dict] = []
+        footprint_fab_polygons: list[dict] = []
 
         fp_line_index = 0
         while fp_line_index < len(fp_block):
@@ -777,6 +839,15 @@ def parse_kicad_board_to_model(board_file: Path, include_component_silkscreen: b
                             "stroke_width_mm": float(width_match.group(1)) if width_match else 0.15,
                         }
                     )
+                if _is_front_fab_block(fp_graphic_text) and start_match and end_match:
+                    width_match = WIDTH_RE.search(fp_graphic_text)
+                    footprint_fab_lines.append(
+                        {
+                            "start_mm": {"x": float(start_match.group(1)), "y": float(start_match.group(2))},
+                            "end_mm": {"x": float(end_match.group(1)), "y": float(end_match.group(2))},
+                            "stroke_width_mm": float(width_match.group(1)) if width_match else 0.15,
+                        }
+                    )
                 fp_line_index = new_fp_idx
                 continue
 
@@ -790,6 +861,13 @@ def parse_kicad_board_to_model(board_file: Path, include_component_silkscreen: b
                     ]
                     if len(points) >= 3:
                         footprint_silkscreen_polygons.append({"points_mm": points})
+                if _is_front_fab_block(fp_graphic_text):
+                    points = [
+                        {"x": float(x), "y": float(y)}
+                        for x, y in XY_RE.findall(fp_graphic_text)
+                    ]
+                    if len(points) >= 3:
+                        footprint_fab_polygons.append({"points_mm": points})
                 fp_line_index = new_fp_idx
                 continue
 
@@ -843,6 +921,37 @@ def parse_kicad_board_to_model(board_file: Path, include_component_silkscreen: b
                     transformed_points.append({"x": round(point_x, 6), "y": round(point_y, 6)})
                 silkscreen_polygons.append({"points_mm": transformed_points})
 
+        if include_fab_layer:
+            for line_item in footprint_fab_lines:
+                start_x, start_y = _transform_to_board_space(
+                    float(line_item["start_mm"]["x"]),
+                    float(line_item["start_mm"]["y"]),
+                    footprint_at,
+                )
+                end_x, end_y = _transform_to_board_space(
+                    float(line_item["end_mm"]["x"]),
+                    float(line_item["end_mm"]["y"]),
+                    footprint_at,
+                )
+                fab_layer_lines.append(
+                    {
+                        "start_mm": {"x": round(start_x, 6), "y": round(start_y, 6)},
+                        "end_mm": {"x": round(end_x, 6), "y": round(end_y, 6)},
+                        "stroke_width_mm": line_item["stroke_width_mm"],
+                    }
+                )
+
+            for polygon_item in footprint_fab_polygons:
+                transformed_points = []
+                for point in polygon_item["points_mm"]:
+                    point_x, point_y = _transform_to_board_space(
+                        float(point["x"]),
+                        float(point["y"]),
+                        footprint_at,
+                    )
+                    transformed_points.append({"x": round(point_x, 6), "y": round(point_y, 6)})
+                fab_layer_polygons.append({"points_mm": transformed_points})
+
         footprints.append(footprint)
 
     if not board_outline_polygons and board_outline_segments:
@@ -881,6 +990,10 @@ def parse_kicad_board_to_model(board_file: Path, include_component_silkscreen: b
             "texts": silkscreen_texts,
             "lines": silkscreen_lines,
             "polygons": silkscreen_polygons,
+        },
+        "fab_layer": {
+            "lines": fab_layer_lines,
+            "polygons": fab_layer_polygons,
         },
     }
     return model
@@ -1176,11 +1289,21 @@ def _svg_for_view(
             str(options["silkscreen_color"]),
             float(options["silk_text_scale"]),
         )
+        fab_layer_svg = _render_svg_fab_layer(
+            board_model,
+            bounds,
+            width,
+            height,
+            16,
+            scale,
+            str(options["silkscreen_color"]),
+        )
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
             f'viewBox="0 0 {width} {height}">'
             f'<rect x="6" y="6" width="148" height="88" fill="{options["soldermask_color"]}" '
             'stroke="#607d8b" stroke-width="2"/>'
+            + fab_layer_svg
             + silkscreen_svg
             + "".join(pins)
             + '</svg>'
@@ -1219,11 +1342,21 @@ def _svg_for_view(
             str(options["silkscreen_color"]),
             float(options["silk_text_scale"]),
         )
+        fab_layer_svg = _render_svg_fab_layer(
+            board_model,
+            bounds,
+            width,
+            height,
+            20,
+            scale,
+            str(options["silkscreen_color"]),
+        )
         return (
             f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
             f'viewBox="0 0 {width} {height}">'
             f'<polygon id="boardOutline" points="{outline_points}" fill="{options["soldermask_color"]}" '
             'stroke="#0f4c81" stroke-width="2"/>'
+            + fab_layer_svg
             + silkscreen_svg
             + "".join(pins)
             + '</svg>'
@@ -1301,6 +1434,15 @@ def _svg_for_view(
         str(options["silkscreen_color"]),
         float(options["silk_text_scale"]),
     )
+    fab_layer_svg = _render_svg_fab_layer(
+        board_model,
+        bounds,
+        width,
+        height,
+        20,
+        scale,
+        str(options["silkscreen_color"]),
+    )
 
     return (
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" '
@@ -1308,6 +1450,7 @@ def _svg_for_view(
         '<g id="board">'
         f'<polygon id="boardOutline" points="{outline_points}" fill="{options["soldermask_color"]}" '
         'stroke="#1b5e20" stroke-width="2"/>'
+        + fab_layer_svg
         + silkscreen_svg
         + '</g>'
         '<g id="copper1">'
@@ -1470,8 +1613,13 @@ def export_board_to_fritzing_stub(
     part_basename = _sanitize_part_basename(part_name or board_file.stem)
     resolved_options = _resolve_render_options(render_options)
     include_comp_silk = resolved_options.get("include_component_silkscreen", False)
+    include_fab = resolved_options.get("include_fab_layer", False)
 
-    model = parse_kicad_board_to_model(board_file, include_component_silkscreen=include_comp_silk)
+    model = parse_kicad_board_to_model(
+        board_file,
+        include_component_silkscreen=include_comp_silk,
+        include_fab_layer=include_fab,
+    )
     write_board_model_json(model, out_dir)
     connector_model = map_model_to_fritzing_connectors(model)
     write_fritzing_connector_model_json(connector_model, out_dir)

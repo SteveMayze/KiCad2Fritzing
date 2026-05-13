@@ -33,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Include component footprint silkscreen (outlines and labels) in generated SVG views",
     )
     parser.add_argument(
+        "--include-fab-layer",
+        action="store_true",
+        help="Include component body layer (F.Fab) outlines in generated SVG views",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -53,7 +58,10 @@ def main() -> int:
         args.board_file,
         args.out_dir,
         part_name=args.part_name,
-        render_options={"include_component_silkscreen": args.include_component_silkscreen},
+        render_options={
+            "include_component_silkscreen": args.include_component_silkscreen,
+            "include_fab_layer": args.include_fab_layer,
+        },
     )
     logging.info("Wrote placeholder output: %s", output_file)
     return 0

@@ -118,6 +118,7 @@ def overlay_kicad_plots_on_breadboard(
 
     overlay_sources = [
         plotted.get("edge_cuts"),
+        plotted.get("f_fab"),
         plotted.get("f_silks"),
     ]
     overlay_sources = [p for p in overlay_sources if p and p.exists()]
@@ -180,7 +181,9 @@ def overlay_kicad_plots_on_breadboard(
     return breadboard_svg_path
 
 
-def plot_kicad_svg_layers(board, out_dir: Path) -> dict[str, Path]:
+def plot_kicad_svg_layers(
+    board, out_dir: Path, include_fab_layer: bool = False
+) -> dict[str, Path]:
     """Plot KiCad-native SVG layers for comparison and future integration.
 
     This spike helper exports KiCad's own SVG for selected layers so we can
@@ -211,10 +214,12 @@ def plot_kicad_svg_layers(board, out_dir: Path) -> dict[str, Path]:
         plot_opts.SetTextMode(pcbnew.PLOT_TEXT_MODE_DEFAULT)
 
     plotted: dict[str, Path] = {}
-    target_layers = (
+    target_layers = [
         ("f_silks", pcbnew.F_SilkS, "Front Silkscreen"),
         ("edge_cuts", pcbnew.Edge_Cuts, "Board Outline"),
-    )
+    ]
+    if include_fab_layer:
+        target_layers.append(("f_fab", pcbnew.F_Fab, "Front Fabrication"))
 
     for key, layer_id, description in target_layers:
         plot_ctrl.SetLayer(layer_id)
@@ -345,11 +350,18 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         silkscreen_sizer = wx.BoxSizer(wx.VERTICAL)
         self.include_component_silkscreen = wx.CheckBox(
             panel,
-            label="Include component footprint outlines and labels",
+            label="Include component footprint outlines and labels (F.SilkS)",
         )
         self.include_component_silkscreen.SetValue(False)
-        silkscreen_sizer.Add(self.include_component_silkscreen, 0, wx.BOTTOM, 8)
-        
+        silkscreen_sizer.Add(self.include_component_silkscreen, 0, wx.BOTTOM, 4)
+
+        self.include_fab_layer = wx.CheckBox(
+            panel,
+            label="Include component body layer (F.Fab)",
+        )
+        self.include_fab_layer.SetValue(False)
+        silkscreen_sizer.Add(self.include_fab_layer, 0, wx.BOTTOM, 8)
+
         sizer.Add(silkscreen_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         
         # Render colors
@@ -490,7 +502,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         self._sync_text_scaling_controls()
         event.Skip()
     
-    def get_values(self) -> tuple[str, Path, float, float, str, str, str, str, bool, bool]:
+    def get_values(self) -> tuple[str, Path, float, float, str, str, str, str, bool, bool, bool]:
         """Return dialog values including rendering options."""
         part_name = self.part_name_input.GetValue()
         part_family = self.part_family_input.GetValue().strip() or "KiCad2Fritzing Generated"
@@ -514,6 +526,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
 
         use_kicad_native_overlay = bool(self.use_kicad_native_overlay.GetValue())
         include_component_silkscreen = bool(self.include_component_silkscreen.GetValue())
+        include_fab_layer = bool(self.include_fab_layer.GetValue())
         return (
             part_name,
             out_dir,
@@ -525,6 +538,7 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
             part_type,
             use_kicad_native_overlay,
             include_component_silkscreen,
+            include_fab_layer,
         )
 
 
@@ -566,6 +580,7 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
                 part_type,
                 use_kicad_native_overlay,
                 include_component_silkscreen,
+                include_fab_layer,
             ) = dlg.get_values()
             out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -575,6 +590,7 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
                 "pad_scale": pad_scale,
                 "silk_text_scale": text_scale,
                 "include_component_silkscreen": include_component_silkscreen,
+                "include_fab_layer": include_fab_layer,
             }
             export_board_to_fritzing_stub(
                 board_path,
@@ -588,7 +604,11 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
             native_overlay_applied = False
 
             if use_kicad_native_overlay:
-                plotted = plot_kicad_svg_layers(board, out_dir / "kicad_svg_plots")
+                plotted = plot_kicad_svg_layers(
+                    board,
+                    out_dir / "kicad_svg_plots",
+                    include_fab_layer=include_fab_layer,
+                )
                 overlaid_path = overlay_kicad_plots_on_breadboard(
                     out_dir,
                     plotted,

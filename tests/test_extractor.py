@@ -192,6 +192,109 @@ def test_component_footprint_silkscreen_is_exported_when_option_enabled(tmp_path
     assert len(model["silkscreen"]["lines"]) > 0
 
 
+def test_fab_layer_is_not_exported_by_default(tmp_path: Path) -> None:
+    board_file = tmp_path / "fab_test.kicad_pcb"
+    board_file.write_text(
+        """
+(kicad_pcb
+    (gr_rect (start 0 0) (end 20 10) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)) (fill none))
+    (footprint "Device:R_0805"
+        (layer "F.Cu")
+        (at 10 5 0)
+        (fp_line (start -1.6 -0.9) (end 1.6 -0.9) (stroke (width 0.1) (type solid)) (layer "F.Fab"))
+        (fp_line (start -1.6 -0.9) (end -1.6 0.9) (stroke (width 0.1) (type solid)) (layer "F.Fab"))
+        (pad "1" smd rect (at -0.95 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+        )
+    )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = parse_kicad_board_to_model(board_file)
+
+    assert model["fab_layer"]["lines"] == []
+    assert model["fab_layer"]["polygons"] == []
+
+
+def test_fab_layer_is_exported_when_option_enabled(tmp_path: Path) -> None:
+    board_file = tmp_path / "fab_test.kicad_pcb"
+    board_file.write_text(
+        """
+(kicad_pcb
+    (gr_rect (start 0 0) (end 20 10) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)) (fill none))
+    (footprint "Device:R_0805"
+        (layer "F.Cu")
+        (at 10 5 0)
+        (fp_line (start -1.6 -0.9) (end 1.6 -0.9) (stroke (width 0.1) (type solid)) (layer "F.Fab"))
+        (fp_line (start -1.6 -0.9) (end -1.6 0.9) (stroke (width 0.1) (type solid)) (layer "F.Fab"))
+        (pad "1" smd rect (at -0.95 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+        )
+    )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = parse_kicad_board_to_model(board_file, include_fab_layer=True)
+
+    assert len(model["fab_layer"]["lines"]) == 2
+
+
+def test_fab_layer_poly_is_exported_when_option_enabled(tmp_path: Path) -> None:
+    board_file = tmp_path / "fab_poly.kicad_pcb"
+    board_file.write_text(
+        """
+(kicad_pcb
+    (gr_rect (start 0 0) (end 20 10) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)) (fill none))
+    (footprint "Device:IC_SOIC8"
+        (layer "F.Cu")
+        (at 10 5 0)
+        (fp_poly
+            (pts (xy -2.5 -2.5) (xy 2.5 -2.5) (xy 2.5 2.5) (xy -2.5 2.5))
+            (stroke (width 0.1) (type solid)) (layer "F.Fab") (fill none)
+        )
+        (pad "1" smd rect (at -1 0) (size 0.6 1.6) (layers "F.Cu" "F.Paste" "F.Mask"))
+        )
+    )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = parse_kicad_board_to_model(board_file, include_fab_layer=True)
+
+    assert len(model["fab_layer"]["polygons"]) == 1
+    assert len(model["fab_layer"]["polygons"][0]["points_mm"]) == 4
+
+
+def test_fab_layer_not_in_silkscreen_when_enabled(tmp_path: Path) -> None:
+    board_file = tmp_path / "fab_isolation.kicad_pcb"
+    board_file.write_text(
+        """
+(kicad_pcb
+    (gr_rect (start 0 0) (end 20 10) (layer "Edge.Cuts") (stroke (width 0.1) (type solid)) (fill none))
+    (footprint "Device:R_0805"
+        (layer "F.Cu")
+        (at 10 5 0)
+        (fp_line (start -1.6 -0.9) (end 1.6 -0.9) (stroke (width 0.1) (type solid)) (layer "F.Fab"))
+        (fp_line (start -1 0) (end 1 0) (stroke (width 0.12) (type solid)) (layer "F.SilkS"))
+        (pad "1" smd rect (at -0.95 0) (size 1 1) (layers "F.Cu" "F.Paste" "F.Mask"))
+        )
+    )
+)
+""".strip(),
+        encoding="utf-8",
+    )
+
+    model = parse_kicad_board_to_model(
+        board_file, include_component_silkscreen=True, include_fab_layer=True
+    )
+
+    assert len(model["silkscreen"]["lines"]) == 1
+    assert len(model["fab_layer"]["lines"]) == 1
+
+
 def test_export_board_to_fritzing_stub_creates_intermediate_model(tmp_path: Path) -> None:
     board_file = Path(
         "references/kicad-projects/basic-led-power/basic-led-power.kicad_pcb"
