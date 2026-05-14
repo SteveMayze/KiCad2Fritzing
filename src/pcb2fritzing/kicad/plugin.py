@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import base64
+import math
+import struct
+import zlib
 from io import BytesIO
 try:
     from PIL import Image, ImageEnhance
@@ -85,6 +88,146 @@ def _board_outline_bounds(svg_root: ET.Element) -> tuple[float, float, float, fl
     min_y = min(y for _, y in points)
     max_y = max(y for _, y in points)
     return (min_x, min_y, max_x - min_x, max_y - min_y)
+
+
+def _png_image_metrics(
+    png_bytes: bytes,
+    alpha_threshold: int = 96,
+) -> tuple[int, int, tuple[int, int, int, int] | None] | None:
+    """Return (width, height, alpha_bounds) for an RGBA/GA PNG.
+
+    alpha_bounds is (min_x, min_y, max_x_exclusive, max_y_exclusive) for
+    pixels with alpha >= alpha_threshold. Returns None when PNG parsing fails.
+    """
+    signature = b"\x89PNG\r\n\x1a\n"
+    if len(png_bytes) < 8 or png_bytes[:8] != signature:
+        return None
+
+    width: int | None = None
+    height: int | None = None
+    bit_depth: int | None = None
+    color_type: int | None = None
+    interlace: int | None = None
+    idat_parts: list[bytes] = []
+
+    offset = 8
+    while offset + 8 <= len(png_bytes):
+        length = struct.unpack(">I", png_bytes[offset:offset + 4])[0]
+        chunk_type = png_bytes[offset + 4:offset + 8]
+        data_start = offset + 8
+        data_end = data_start + length
+        crc_end = data_end + 4
+        if crc_end > len(png_bytes):
+            return None
+        chunk_data = png_bytes[data_start:data_end]
+
+        if chunk_type == b"IHDR":
+            if length < 13:
+                return None
+            width, height, bit_depth, color_type, _compression, _filter, interlace = struct.unpack(
+                ">IIBBBBB",
+                chunk_data[:13],
+            )
+        elif chunk_type == b"IDAT":
+            idat_parts.append(chunk_data)
+        elif chunk_type == b"IEND":
+            break
+
+        offset = crc_end
+
+    if (
+        width is None
+        or height is None
+        or bit_depth is None
+        or color_type is None
+        or interlace is None
+    ):
+        return None
+
+    if width <= 0 or height <= 0:
+        return None
+
+    # Return dimensions even for unsupported formats.
+    if interlace != 0 or color_type not in (4, 6) or bit_depth not in (8, 16):
+        return (width, height, None)
+
+    channels = 2 if color_type == 4 else 4
+    bytes_per_sample = 2 if bit_depth == 16 else 1
+    bytes_per_pixel = channels * bytes_per_sample
+    scanline_len = math.ceil(width * channels * bit_depth / 8)
+
+    try:
+        raw = zlib.decompress(b"".join(idat_parts))
+    except zlib.error:
+        return (width, height, None)
+
+    expected_len = (scanline_len + 1) * height
+    if len(raw) < expected_len:
+        return (width, height, None)
+
+    min_x = width
+    min_y = height
+    max_x = -1
+    max_y = -1
+
+    prev = bytearray(scanline_len)
+    for y in range(height):
+        base = y * (scanline_len + 1)
+        filter_type = raw[base]
+        row = bytearray(raw[base + 1: base + 1 + scanline_len])
+
+        if filter_type == 1:  # Sub
+            for i in range(scanline_len):
+                left = row[i - bytes_per_pixel] if i >= bytes_per_pixel else 0
+                row[i] = (row[i] + left) & 0xFF
+        elif filter_type == 2:  # Up
+            for i in range(scanline_len):
+                row[i] = (row[i] + prev[i]) & 0xFF
+        elif filter_type == 3:  # Average
+            for i in range(scanline_len):
+                left = row[i - bytes_per_pixel] if i >= bytes_per_pixel else 0
+                up = prev[i]
+                row[i] = (row[i] + ((left + up) // 2)) & 0xFF
+        elif filter_type == 4:  # Paeth
+            for i in range(scanline_len):
+                left = row[i - bytes_per_pixel] if i >= bytes_per_pixel else 0
+                up = prev[i]
+                up_left = prev[i - bytes_per_pixel] if i >= bytes_per_pixel else 0
+                p = left + up - up_left
+                pa = abs(p - left)
+                pb = abs(p - up)
+                pc = abs(p - up_left)
+                predictor = left if pa <= pb and pa <= pc else (up if pb <= pc else up_left)
+                row[i] = (row[i] + predictor) & 0xFF
+        elif filter_type != 0:  # None
+            return (width, height, None)
+
+        alpha_offset = bytes_per_sample if color_type == 4 else (3 * bytes_per_sample)
+        stride = bytes_per_pixel
+        for x in range(width):
+            pixel_idx = x * stride + alpha_offset
+            if bit_depth == 16:
+                alpha = (row[pixel_idx] << 8) | row[pixel_idx + 1]
+                alpha = alpha >> 8
+            else:
+                alpha = row[pixel_idx]
+
+            if alpha >= alpha_threshold:
+                if x < min_x:
+                    min_x = x
+                if x > max_x:
+                    max_x = x
+                if y < min_y:
+                    min_y = y
+                if y > max_y:
+                    max_y = y
+
+        prev = row
+
+    if max_x < min_x or max_y < min_y:
+        return (width, height, None)
+
+    return (width, height, (min_x, min_y, max_x + 1, max_y + 1))
 
 
 def _remove_custom_silkscreen_elements(svg_root: ET.Element, silkscreen_color: str = "#f5f5f5") -> None:
@@ -623,15 +766,37 @@ def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
             png_bytes = render_path.read_bytes()
     else:
         png_bytes = render_path.read_bytes()
+    image_x = bx
+    image_y = by
+    image_w = bw
+    image_h = bh
+
+    # kicad-cli high-quality renders can include low-alpha haze/shadow across
+    # the full canvas. Detect the meaningful alpha content bounds and remap the
+    # image so the board area aligns with boardOutline dimensions.
+    metrics = _png_image_metrics(png_bytes, alpha_threshold=96)
+    if metrics is not None:
+        img_w_px, img_h_px, alpha_bounds = metrics
+        if alpha_bounds is not None:
+            min_x_px, min_y_px, max_x_px, max_y_px = alpha_bounds
+            content_w_px = max(1, max_x_px - min_x_px)
+            content_h_px = max(1, max_y_px - min_y_px)
+            scale_x = bw / content_w_px
+            scale_y = bh / content_h_px
+            image_x = bx - (min_x_px * scale_x)
+            image_y = by - (min_y_px * scale_y)
+            image_w = img_w_px * scale_x
+            image_h = img_h_px * scale_y
+
     png_data = base64.b64encode(png_bytes).decode("ascii")
     ET.SubElement(
         render_group,
         f"{{{SVG_NS}}}image",
         {
-            "x": str(round(bx, 3)),
-            "y": str(round(by, 3)),
-            "width": str(round(bw, 3)),
-            "height": str(round(bh, 3)),
+            "x": str(round(image_x, 3)),
+            "y": str(round(image_y, 3)),
+            "width": str(round(image_w, 3)),
+            "height": str(round(image_h, 3)),
             "href": f"data:image/png;base64,{png_data}",
             # preserveAspectRatio="none" works correctly here because we
             # computed the PNG dimensions to match the board aspect ratio.
