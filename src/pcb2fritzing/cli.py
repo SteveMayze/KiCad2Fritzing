@@ -98,6 +98,7 @@ def main() -> int:
         if model_json_path.exists():
             model_data = json.loads(model_json_path.read_text(encoding="utf-8"))
             board_bounds_mm = model_data.get("board_outline", {}).get("bounds_mm")
+        render_diagnostics: list[str] = []
         render_png = render_board_3d(
             args.board_file,
             args.out_dir / "kicad_svg_plots",
@@ -105,7 +106,10 @@ def main() -> int:
             kicad_cli_path=args.kicad_cli_path,
             soldermask_color=args.soldermask_color,
             silkscreen_color=args.silkscreen_color,
+            diagnostics=render_diagnostics,
         )
+        for line in render_diagnostics:
+            logging.info(line.strip())
         if render_png:
             embed_3d_render_in_breadboard_svg(args.out_dir, render_png)
             logging.info("Embedded 3D render: %s", render_png)

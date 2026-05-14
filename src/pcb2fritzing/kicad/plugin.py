@@ -428,6 +428,7 @@ def render_board_3d(
     kicad_cli_path: str | None = None,
     soldermask_color: str | None = None,
     silkscreen_color: str | None = None,
+    diagnostics: list[str] | None = None,
 ) -> "Path | None":
     """Render the board top-down using kicad-cli and return the PNG path.
 
@@ -471,29 +472,82 @@ def render_board_3d(
             else:
                 width_px = max(100, round(2000 * bw / bh))
 
-    cmd = [
-        cli, "pcb", "render",
-        "--side", "top",
-        "--background", "transparent",
-        "--quality", "high",
-        "--width", str(width_px),
-        "--height", str(height_px),
-        "--output", str(render_path),
-        str(render_source),
-    ]
-    try:
-        result = subprocess.run(cmd, capture_output=True, timeout=120, cwd=str(board_file.parent))
+    def _diag(msg: str) -> None:
+        if diagnostics is not None:
+            diagnostics.append(msg)
+
+    def _summarize_output(text: bytes | str | None) -> str:
+        if text is None:
+            return ""
+        if isinstance(text, bytes):
+            try:
+                value = text.decode("utf-8", errors="replace")
+            except Exception:  # noqa: BLE001
+                value = str(text)
+        else:
+            value = text
+        value = value.strip()
+        if not value:
+            return ""
+        lines = value.splitlines()
+        return " | ".join(lines[-3:])
+
+    def _run_render(source_path: Path, label: str) -> bool:
+        cmd = [
+            cli, "pcb", "render",
+            "--side", "top",
+            "--background", "transparent",
+            "--quality", "high",
+            "--width", str(width_px),
+            "--height", str(height_px),
+            "--output", str(render_path),
+            str(source_path),
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=120,
+                cwd=str(board_file.parent),
+            )
+        except subprocess.TimeoutExpired:
+            _diag(f"  kicad-cli render ({label}) timed out after 120s.")
+            return False
+        except Exception as exc:  # noqa: BLE001
+            _diag(f"  kicad-cli render ({label}) failed to execute: {exc}")
+            return False
+
         if result.returncode == 0 and render_path.exists():
+            return True
+
+        stderr_summary = _summarize_output(result.stderr)
+        stdout_summary = _summarize_output(result.stdout)
+        _diag(f"  kicad-cli render ({label}) failed (exit {result.returncode}).")
+        if stderr_summary:
+            _diag(f"    stderr: {stderr_summary}")
+        elif stdout_summary:
+            _diag(f"    stdout: {stdout_summary}")
+        return False
+
+    try:
+        # First try the selected source (patched temp board when available), then
+        # fall back to the original board if the patched render fails.
+        if _run_render(render_source, "patched board" if render_source != board_file else "board"):
             return render_path
-    except Exception:  # noqa: BLE001
-        pass
+
+        if render_source != board_file:
+            _diag("  Retrying 3D render with original board file (no temporary color patch)...")
+            if _run_render(board_file, "original board"):
+                _diag("  Fallback render succeeded using original board file.")
+                return render_path
+
+        return None
     finally:
         if tmp_board is not None:
             try:
                 tmp_board.unlink(missing_ok=True)
             except OSError:
                 pass
-    return None
 
 
 def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
@@ -1092,6 +1146,8 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
                 self.append_message(f"  Board bounds from model: {board_bounds_mm}")
             else:
                 self.append_message("  WARNING: board_model.json not found; render may be uncropped.")
+
+            render_diagnostics: list[str] = []
             render_png = render_board_3d(
                 self.board_path,
                 out_dir / "kicad_svg_plots",
@@ -1099,7 +1155,10 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
                 kicad_cli_path=kicad_cli_path or None,
                 soldermask_color=soldermask_color,
                 silkscreen_color=silkscreen_color,
+                diagnostics=render_diagnostics,
             )
+            for line in render_diagnostics:
+                self.append_message(line)
             if render_png:
                 self.append_message(f"  3D render saved: {render_png}")
                 embedded = embed_3d_render_in_breadboard_svg(out_dir, render_png)
