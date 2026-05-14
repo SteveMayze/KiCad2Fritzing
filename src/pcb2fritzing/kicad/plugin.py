@@ -457,6 +457,24 @@ def _find_sexp_block(content: str, marker: str, search_start: int = 0) -> "tuple
     return None
 
 
+def _find_sexp_block_at(content: str, start_pos: int) -> "tuple[int, int] | None":
+    """Return (start, end) of an S-expr whose opening '(' is at *start_pos*."""
+    if start_pos < 0 or start_pos >= len(content) or content[start_pos] != "(":
+        return None
+    depth = 0
+    i = start_pos
+    while i < len(content):
+        ch = content[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return (start_pos, i + 1)
+        i += 1
+    return None
+
+
 def _patch_stackup_layer_color(content: str, layer_name: str, color: str) -> str:
     """Within the (stackup ...) block, set the (color ...) entry of a named layer."""
     stackup_range = _find_sexp_block(content, "(stackup")
@@ -465,22 +483,26 @@ def _patch_stackup_layer_color(content: str, layer_name: str, color: str) -> str
     stackup_start, stackup_end = stackup_range
     stackup = content[stackup_start:stackup_end]
 
-    layer_marker = f'(layer "{layer_name}"'
-    layer_range = _find_sexp_block(stackup, layer_marker)
+    # Support both `(layer "F.Mask" ...)` and `(layer F.Mask ...)` styles.
+    layer_re = re.compile(rf'\(layer\s+"?{re.escape(layer_name)}"?(?=[\s\)])')
+    layer_match = layer_re.search(stackup)
+    if layer_match is None:
+        return content
+    layer_range = _find_sexp_block_at(stackup, layer_match.start())
     if layer_range is None:
         return content
     layer_start, layer_end = layer_range
     block = stackup[layer_start:layer_end]
 
-    color_re = re.compile(r'\(color\s+"[^"]*"\)')
+    color_re = re.compile(r'\(color\s+(?:"[^"]*"|#[0-9A-Fa-f]{6}|[^\s\)]+)\)')
     if color_re.search(block):
         new_block = color_re.sub(f'(color "{color}")', block)
     else:
-        # Insert (color "...") before the closing ) of the block.
+        # Insert (color "...") before the layer block closing parenthesis.
         insert_pos = len(block) - 1
         while insert_pos > 0 and block[insert_pos - 1] in " \t\n\r":
             insert_pos -= 1
-        new_block = block[:insert_pos] + f'\n\t\t\t\t(color "{color}"))' + block[insert_pos + 1:]
+        new_block = block[:insert_pos] + f'\n\t\t\t\t(color "{color}")' + block[insert_pos:]
 
     new_stackup = stackup[:layer_start] + new_block + stackup[layer_end:]
     return content[:stackup_start] + new_stackup + content[stackup_end:]
@@ -774,9 +796,28 @@ def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
     # kicad-cli high-quality renders can include low-alpha haze/shadow across
     # the full canvas. Detect the meaningful alpha content bounds and remap the
     # image so the board area aligns with boardOutline dimensions.
-    metrics = _png_image_metrics(png_bytes, alpha_threshold=96)
-    if metrics is not None:
+    # Prefer aggressive thresholds first so soft shadows/haze do not expand the
+    # fitted bounds. Fall back progressively for edge cases.
+    selected_metrics: tuple[int, int, tuple[int, int, int, int] | None] | None = None
+    for threshold in (224, 192, 160, 128, 96):
+        metrics = _png_image_metrics(png_bytes, alpha_threshold=threshold)
+        if metrics is None:
+            continue
         img_w_px, img_h_px, alpha_bounds = metrics
+        if alpha_bounds is None:
+            continue
+        min_x_px, min_y_px, max_x_px, max_y_px = alpha_bounds
+        content_w_px = max(1, max_x_px - min_x_px)
+        content_h_px = max(1, max_y_px - min_y_px)
+        area_ratio = (content_w_px * content_h_px) / max(1, img_w_px * img_h_px)
+
+        selected_metrics = metrics
+        # Accept the first threshold that trims at least a little border.
+        if area_ratio < 0.995:
+            break
+
+    if selected_metrics is not None:
+        img_w_px, img_h_px, alpha_bounds = selected_metrics
         if alpha_bounds is not None:
             min_x_px, min_y_px, max_x_px, max_y_px = alpha_bounds
             content_w_px = max(1, max_x_px - min_x_px)
