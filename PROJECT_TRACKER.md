@@ -2,53 +2,80 @@
 
 ## Completed
 
+### Foundations
+
 - Set up Python package scaffold for the utility.
 - Added CLI entrypoint and core extractor placeholder.
 - Added KiCad Action Plugin skeleton.
+- Added `requirements.txt` dependency list.
 - Organized reference artifacts under `references/`.
-- Added test framework with `pytest` and initial test coverage.
 - Added a simple KiCad reference project (`basic-led-power`) with V+ and GND connector plus LED board.
+
+### Parser, Model, and Connector Pipeline
+
 - Implemented initial `.kicad_pcb` parser for nets, footprints, and pads.
 - Implemented intermediate model output (`board_model.json`) with test coverage against the reference board.
 - Implemented starter connector mapping from board model to Fritzing-oriented connector model.
 - Implemented connector artifact output (`fritzing_connectors.json`) with test coverage.
+
+### Fritzing Artifact Generation and Packaging
+
 - Implemented minimal generated Fritzing part output (`generated_part.fzp`) from connector model.
 - Implemented placeholder SVG generation for icon/breadboard/schematic/pcb views.
 - Implemented artifact consistency validation across `.fzp` and SVG connector references.
+- Added `.fzpz` package generation from produced Fritzing artifacts.
+- Added KiCad 10 distribution packaging script and generated dist artifacts.
+
+### SVG Geometry and Silkscreen Rendering
+
 - Replaced placeholder SVG connector placement with board-coordinate-based geometry projection.
 - Implemented Edge.Cuts board outline extraction and applied it in generated breadboard/pcb SVG geometry.
 - Extended Edge.Cuts parsing to include `gr_line`, `gr_poly`, and `gr_arc` primitives.
-- Added KiCad 10 distribution packaging script and generated dist artifacts.
-- Added `.fzpz` package generation from produced Fritzing artifacts.
-- Fixed KiCad plugin loader syntax and improved PCM install documentation.
 - Added front silkscreen extraction and rendering into generated SVG views.
 - Fixed board projection orientation so generated geometry is not vertically mirrored.
 - Cropped generated SVG canvas to board bounds to remove excessive gray padding in Fritzing.
 - Filtered non-user-facing silkscreen content (component reference/value and component footprint silk).
-- Added regression tests for silkscreen parsing/rendering, coordinate projection, filtering, and SVG sizing.
-- Added `requirements.txt` dependency list.
-- Added opt-in external repository integration testing (clone at test time, parse/generate/validate, no project copy in this repo).
+
+### Plugin UX and Metadata
+
+- Fixed KiCad plugin loader syntax and improved PCM install documentation.
 - Added plugin output-directory UX improvements (create-directory browse, project-relative defaults, OS separator suffix behavior).
 - Added render-option controls for soldermask/silkscreen color and pad scaling in plugin dialog.
 - Added Fritzing metadata safeguards: generated `.fzp` now includes non-empty `family` and `type` properties.
 - Added plugin dialog controls for user-defined Part Family and Part Type with defaults.
+
+### Test and Validation Coverage
+
+- Added test framework with `pytest` and initial test coverage.
+- Added regression tests for silkscreen parsing/rendering, coordinate projection, filtering, and SVG sizing.
 - Added regression tests for `.fzp` family/type defaults and override behavior.
+- Added opt-in external repository integration testing (clone at test time, parse/generate/validate, no project copy in this repo).
 
 ## Current Focus
 
 - Keep stabilizing cross-tool compatibility (KiCad export -> Fritzing import) with guardrail tests and small iterative UX fixes.
 
-## Next Steps
+## Status Board (Reconciled 2026-05-14)
 
-- Capture and reproduce the new board issues with minimal fixtures.
-- Add targeted failing tests for those board-specific failures before fixing code.
-- Harden parser handling for board/footprint variants (text, layers, and geometry edge cases).
-- Investigate KiCad-native SVG generation as a silkscreen source:
-	- identify pcbnew/plot APIs that can export front silkscreen and Edge.Cuts programmatically,
-	- compare generated SVG fidelity (text placement, proportion, and layer alignment) against current renderer,
-	- assess whether this can replace manual text scaling and simplify silkscreen handling.
+| Workstream | Status | Notes |
+| --- | --- | --- |
+| Core parser + connector + artifact generation baseline | Done | Covered by existing Completed history and passing baseline tests. |
+| KiCad-native SVG plotting investigation and plugin overlay path | Done | Investigation completed and integration path implemented in plugin flow. |
+| Plugin UX improvements (output dir handling, metadata, render controls, diagnostics) | Done | Primary UX improvements delivered; final polish remains tied to revised Balsamiq draft. |
+| Cross-tool compatibility hardening on real boards | In Progress | Active focus for iterative fixes and guardrail test expansion. |
+| SWIG -> IPC migration planning and execution | Open | Planned; no full adapter/execution migration merged yet. |
+| CI on push/PR | Open | No GitHub Actions workflow currently present. |
+
+## In Progress
+
+- Capture and reproduce new board issues with minimal fixtures.
+- Add targeted failing tests for board-specific failures before fixing code.
+- Harden parser handling for board/footprint variants (text, layers, geometry edge cases).
 - Validate connector IDs/names/mappings on at least two real board designs.
 - Validate generated `.fzp` schema assumptions against actual Fritzing import behavior.
+
+## Open
+
 - Add optional CLI flags for `--part-family` and `--part-type` parity with plugin dialog metadata controls.
 - Add round-trip checks using Fritzing import/export where practical.
 - Add tests around plugin behavior and end-to-end integration flow.
@@ -56,19 +83,24 @@
 	- inventory current SWIG-dependent code paths in plugin/export flow,
 	- design an IPC-backed adapter layer to preserve current CLI/plugin behavior,
 	- implement and validate IPC-based plugin execution on KiCad 10+ while keeping test coverage green.
-- Refine the KiCad plugin dialog UX after the updated Balsamiq draft is ready:
-	- review field layout/labels and default value presentation,
-	- apply control validation and input hints where needed,
+- Finalize the KiCad plugin dialog UX once the updated Balsamiq draft is ready:
+	- review remaining field layout/labels and default value presentation deltas,
+	- apply any remaining validation/input-hint polish from the revised design,
 	- confirm final dialog behavior in KiCad with the revised design.
 - Add CI to run tests automatically on push/PR.
+
+## Blocked
+
+- None currently tracked.
 
 ## Notes
 
 - Current baseline is stable: full test suite is passing.
-- Vector text-to-path rendering was intentionally deferred to reduce troubleshooting noise.
 - Immediate priority is correctness and portability across multiple real KiCad boards.
 
 ### KiCad SVG Plotting Investigation (Started 2026-05-13)
+
+Status: Completed (investigation + plugin integration path implemented).
 
 - Confirmed KiCad Python API exposes programmatic plotting via `pcbnew.PLOT_CONTROLLER` and `pcbnew.PCB_PLOT_PARAMS`.
 - Confirmed relevant plotting flow is available from Python:
@@ -88,12 +120,13 @@
 
 ### KiCad SVG Plotting Spike Plan
 
-- Add a small plugin-only spike function to plot `F_SilkS` and `Edge_Cuts` to SVG in a temp/output folder.
-- Compare KiCad-plotted SVG against current generated silkscreen on at least one known board (e.g. `Quick_5V`).
-- Decide merge strategy:
-	- either consume KiCad SVG directly for breadboard overlay,
-	- or extract only silkscreen primitives from KiCad SVG and composite into current board SVG.
-- Define fallback behavior for non-KiCad runtime (CLI/tests) to keep current parser-based rendering path intact.
+Status: Completed.
+
+- Plugin path can generate part output using KiCad-plotted `F_SilkS` and `Edge_Cuts` overlays.
+- Native overlay integration is implemented for non-3D flow and can be used for 2D-render-first output.
+- Current default behavior prefers photorealistic 3D render mode.
+- In 3D mode, advanced 2D overlay controls are disabled by default to avoid mixed-mode/ghosted output.
+- Parser-based SVG generation remains available as the non-KiCad-runtime fallback path (CLI/tests).
 
 ## New Board Issue Checklist
 

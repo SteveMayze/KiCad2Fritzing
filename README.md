@@ -124,9 +124,16 @@ Detailed install steps are in:
 
 ## Next Steps
 
-- Parse `.kicad_pcb` and map pads/nets into Fritzing connector model.
-- Generate Fritzing package outputs (`.fzp` + SVG views).
-- Add tests for board parsing and connector mapping.
+- Capture and reproduce board-specific compatibility issues with minimal fixtures.
+- Add targeted failing tests before each board-specific fix.
+- Harden parser coverage for board/footprint edge cases (text, layers, geometry variants).
+- Validate connector IDs/names/mappings on at least two real board designs.
+- Validate generated `.fzp` schema assumptions against actual Fritzing import behavior.
+- Add CLI parity flags for plugin metadata controls (`--part-family`, `--part-type`).
+- Add round-trip checks using Fritzing import/export where practical.
+- Expand plugin behavior and end-to-end integration tests.
+- Plan and execute migration from deprecated KiCad SWIG bindings to the supported IPC plugin framework.
+- Add CI to run tests automatically on push/PR.
 
 ## Testing
 
