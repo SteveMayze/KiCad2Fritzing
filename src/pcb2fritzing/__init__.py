@@ -1,4 +1,4 @@
-"""KiCad2Fritzing package."""
+"""pcb2fritzing package."""
 
 __all__ = ["__version__"]
 

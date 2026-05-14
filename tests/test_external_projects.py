@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from kicad2fritzing.core.extractor import (
+from pcb2fritzing.core.extractor import (
     map_model_to_fritzing_connectors,
     parse_kicad_board_to_model,
     validate_generated_artifacts,

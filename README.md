@@ -1,6 +1,6 @@
-# KiCad2Fritzing
+# PCB to Fritzing Part
 
-Utility and future KiCad extension for generating Fritzing-compatible part assets from KiCad board layout data.
+A KiCad Action Plugin (and CLI utility) for generating Fritzing-compatible part assets from KiCad PCB layout data.
 
 ## Overview
 
@@ -25,9 +25,9 @@ Current status:
 
 ## Repository Layout
 
-- `src/kicad2fritzing/`: Main Python package.
-- `src/kicad2fritzing/core/`: Extraction and conversion logic.
-- `src/kicad2fritzing/kicad/`: KiCad extension/plugin integration code.
+- `src/pcb2fritzing/`: Main Python package.
+- `src/pcb2fritzing/core/`: Extraction and conversion logic.
+- `src/pcb2fritzing/kicad/`: KiCad extension/plugin integration code.
 - `PROJECT_TRACKER.md`: Ongoing development checklist and focus tracking.
 - `references/fritzing-parts/`: `.fzp` reference files.
 - `references/kicad-exports/`: KiCad export SVG references.
@@ -49,13 +49,13 @@ pip install -e "src[dev]"
 ## CLI Execution
 
 ```bash
-kicad2fritzing path/to/board.kicad_pcb --out-dir build/fritzing-part
+pcb2fritzing path/to/board.kicad_pcb --out-dir build/fritzing-part
 ```
 
 Override the default board-derived part/package name:
 
 ```bash
-kicad2fritzing path/to/board.kicad_pcb --out-dir build/fritzing-part --part-name my-custom-part
+pcb2fritzing path/to/board.kicad_pcb --out-dir build/fritzing-part --part-name my-custom-part
 ```
 
 For now, this creates placeholder output to validate project wiring and flow.
@@ -74,7 +74,7 @@ These values are written into the generated `.fzp` under `<properties>` and infl
 
 ## KiCad Extension Direction
 
-The Action Plugin scaffold is available in `src/kicad2fritzing/kicad/plugin.py`.
+The Action Plugin scaffold is available in `src/pcb2fritzing/kicad/plugin.py`.
 
 Planned behavior:
 - Run from KiCad PCB Editor.
@@ -90,8 +90,8 @@ python3 scripts/build_kicad10_dist.py
 ```
 
 Generated artifacts:
-- `dist/kicad10-action-plugin/KiCad2Fritzing/`
-- `dist/KiCad2Fritzing-kicad10-action-plugin.zip`
+- `dist/pcb2fritzing-pcm/`
+- `dist/PCB2FritzingPart-pcm.zip`
 
 Install path on macOS for KiCad 10 Action Plugins:
 - `~/Library/Application Support/kicad/10.0/scripting/plugins`
@@ -156,6 +156,6 @@ Rendering tuning:
 
 ## Fritzing Import Notes
 
-- If you previously imported early generated parts and see startup warnings from Fritzing local parts scanning, remove stale `kicad2fritzing.*` entries from:
+- If you previously imported early generated parts and see startup warnings from Fritzing local parts scanning, remove stale `pcb2fritzing.*` entries from:
   - `~/Library/Application Support/Fritzing/Fritzing/local_parts/user/`
 - Re-import a newly generated `.fzpz` from this version to refresh metadata with required `family/type` properties.

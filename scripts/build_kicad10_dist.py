@@ -40,7 +40,7 @@ else:
     _config = {}
 
 _USERNAME = _config.get("username", "YOURUSERNAME")
-_AUTHOR_NAME = _config.get("author_name", "KiCad2Fritzing Contributors")
+_AUTHOR_NAME = _config.get("author_name", "PCB to Fritzing Part Contributors")
 _CONTACT_WEB = _config.get("contact_web", f"https://github.com/{_USERNAME}/KiCad2Fritzing")
 
 # ---------------------------------------------------------------------------
@@ -51,15 +51,15 @@ _CONTACT_WEB = _config.get("contact_web", f"https://github.com/{_USERNAME}/KiCad
 # ---------------------------------------------------------------------------
 METADATA: dict = {
     "$schema": "https://go.kicad.org/pcm/schemas/v2",
-    "name": "KiCad2Fritzing",
-    "description": "Export KiCad board layouts to Fritzing starter assets.",
+    "name": "PCB to Fritzing Part",
+    "description": "Export KiCad PCB layouts to Fritzing part assets.",
     "description_full": (
-        "KiCad2Fritzing is an action plugin for the KiCad PCB editor that "
+        "PCB to Fritzing Part is an action plugin for the KiCad PCB editor that "
         "extracts board layout information — footprints, pads, nets, and board "
         "outline — and generates Fritzing-compatible part files (.fzp) and SVG "
         "views ready for use in Fritzing."
     ),
-    "identifier": f"com.github.{_USERNAME}.kicad2fritzing",
+    "identifier": f"com.github.{_USERNAME}.pcb2fritzing",
     "type": "plugin",
     "author": {
         "name": _AUTHOR_NAME,
@@ -85,7 +85,7 @@ METADATA: dict = {
 # KiCad scans files at this level to discover ActionPlugin subclasses.
 _PLUGIN_ENTRY = "\n".join(
     [
-        '"""KiCad Action Plugin entry point for KiCad2Fritzing (PCM-installed)."""',
+        '"""KiCad Action Plugin entry point for PCB to Fritzing Part (PCM-installed)."""',
         "from __future__ import annotations",
         "",
         "import sys",
@@ -93,7 +93,7 @@ _PLUGIN_ENTRY = "\n".join(
         "",
         "# Always write a diagnostic log to help debug plugin discovery issues.",
         "_plugins_dir = Path(__file__).parent",
-        '_log_path = _plugins_dir / "kicad2fritzing_plugin_discovery.log"',
+        '_log_path = _plugins_dir / "pcb2fritzing_plugin_discovery.log"',
         "",
         "def _write_log(msg: str) -> None:",
         '    """Write diagnostic log, creating or appending as needed."""',
@@ -103,11 +103,11 @@ _PLUGIN_ENTRY = "\n".join(
         "    except Exception:",
         "        pass  # Silently fail if we can't write the log",
         "",
-        "# Make the sibling kicad2fritzing package importable when KiCad loads this file.",
+        "# Make the sibling pcb2fritzing package importable when KiCad loads this file.",
         "if str(_plugins_dir) not in sys.path:",
         "    sys.path.insert(0, str(_plugins_dir))",
         "",
-        '_write_log("=== KiCad2Fritzing plugin loader invoked ===")',
+        '_write_log("=== PCB to Fritzing Part plugin loader invoked ===")',
         "",
         "# Check if SWIG pcbnew is available (required for ActionPlugin in KiCad 10).",
         "_pcbnew_available = False",
@@ -124,7 +124,7 @@ _PLUGIN_ENTRY = "\n".join(
         '    _write_log("Plugin registration skipped: SWIG runtime not available")',
         "else:",
         "    try:",
-        "        from kicad2fritzing.kicad.plugin import register_plugin  # noqa: E402",
+        "        from pcb2fritzing.kicad.plugin import register_plugin  # noqa: E402",
         "",
         "        _registered = register_plugin()",
         "        if _registered:",
@@ -154,9 +154,9 @@ def _copy_package(src: Path, dst: Path) -> None:
 
 def main() -> int:
     repo_root = Path(__file__).resolve().parents[1]
-    src_pkg = repo_root / "src" / "kicad2fritzing"
+    src_pkg = repo_root / "src" / "pcb2fritzing"
     dist_root = repo_root / "dist"
-    archive_root = dist_root / "kicad2fritzing-pcm"
+    archive_root = dist_root / "pcb2fritzing-pcm"
 
     # ---- (re)build the exploded archive directory --------------------------
     if archive_root.exists():
@@ -174,14 +174,14 @@ def main() -> int:
     plugins_dir.mkdir()
     (plugins_dir / "__init__.py").write_text(_PLUGIN_ENTRY, encoding="utf-8")
     # Use lowercase action filename for stable behavior across platforms.
-    (plugins_dir / "kicad2fritzing_action.py").write_text(_PLUGIN_ENTRY, encoding="utf-8")
-    _copy_package(src_pkg, plugins_dir / "kicad2fritzing")
+    (plugins_dir / "pcb2fritzing_action.py").write_text(_PLUGIN_ENTRY, encoding="utf-8")
+    _copy_package(src_pkg, plugins_dir / "pcb2fritzing")
 
     # resources/ – placeholder; drop a 64×64 icon.png here to show in PCM
     (archive_root / "resources").mkdir()
 
     # ---- zip ---------------------------------------------------------------
-    zip_path = dist_root / "KiCad2Fritzing-pcm.zip"
+    zip_path = dist_root / "PCB2FritzingPart-pcm.zip"
     if zip_path.exists():
         zip_path.unlink()
     shutil.make_archive(str(zip_path.with_suffix("")), "zip", root_dir=archive_root)

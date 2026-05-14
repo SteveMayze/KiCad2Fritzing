@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from kicad2fritzing import cli
+from pcb2fritzing import cli
 
 
 def test_cli_main_generates_output(monkeypatch, tmp_path: Path) -> None:
@@ -11,7 +11,7 @@ def test_cli_main_generates_output(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         "sys.argv",
         [
-            "kicad2fritzing",
+            "pcb2fritzing",
             str(board_file),
             "--out-dir",
             str(out_dir),
@@ -32,7 +32,7 @@ def test_cli_main_generates_output_with_part_name(monkeypatch, tmp_path: Path) -
     monkeypatch.setattr(
         "sys.argv",
         [
-            "kicad2fritzing",
+            "pcb2fritzing",
             str(board_file),
             "--out-dir",
             str(out_dir),

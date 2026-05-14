@@ -16,15 +16,15 @@ Artifacts produced:
 
 | Path | Purpose |
 |------|---------|
-| `dist/kicad2fritzing-pcm/` | Exploded archive (useful for inspection / debugging) |
-| `dist/KiCad2Fritzing-pcm.zip` | PCM-installable zip — use this to install |
+| `dist/pcb2fritzing-pcm/` | Exploded archive (useful for inspection / debugging) |
+| `dist/PCB2FritzingPart-pcm.zip` | PCM-installable zip — use this to install |
 
 ### Before distributing publicly
 
 Open `scripts/build_kicad10_dist.py` and update the `METADATA` dictionary at the top of
 the file with your real details:
 
-- `identifier` — reverse-DNS identifier, e.g. `com.github.YOURUSERNAME.kicad2fritzing`
+- `identifier` — reverse-DNS identifier, e.g. `com.github.YOURUSERNAME.pcb2fritzing`
 - `author.name` and `author.contact.web`
 - `resources.homepage`
 
@@ -39,7 +39,7 @@ This is the recommended method and requires no manual folder copying.
 1. Open **KiCad** (the main launcher, not the PCB editor).
 2. Click **Plugin and Content Manager** (the puzzle-piece icon on the toolbar).
 3. In the PCM dialog click **Install from File…** (bottom-left).
-4. Browse to `dist/KiCad2Fritzing-pcm.zip` and open it.
+4. Browse to `dist/PCB2FritzingPart-pcm.zip` and open it.
 5. KiCad will validate the package metadata and install it.
 6. Click **Apply Pending Changes**.
 7. Restart KiCad when prompted.
@@ -49,7 +49,7 @@ This is the recommended method and requires no manual folder copying.
 ## 3. Use the Plugin
 
 1. Open the **PCB Editor** (`pcbnew`) with an existing `.kicad_pcb` board.
-2. Select **Tools → External Plugins → KiCad2Fritzing**.
+2. Select **Tools → External Plugins → PCB to Fritzing Part**.
 3. The plugin writes conversion output into a `fritzing-part/` folder alongside the open board file.
 
 ---
@@ -59,12 +59,12 @@ This is the recommended method and requires no manual folder copying.
 The PCM zip follows the required KiCad addon layout:
 
 ```
-KiCad2Fritzing-pcm.zip
+PCB2FritzingPart-pcm.zip
 ├── metadata.json                    # PCM package descriptor
 ├── plugins/
 │   ├── __init__.py                 # compatibility loader entry
-│   ├── kicad2fritzing_action.py    # top-level action plugin entry (scanned by KiCad)
-│   └── kicad2fritzing/             # helper package
+│   ├── pcb2fritzing_action.py      # top-level action plugin entry (scanned by KiCad)
+│   └── pcb2fritzing/               # helper package
 │       ├── __init__.py
 │       ├── cli.py
 │       ├── core/
@@ -83,10 +83,10 @@ not in the archive itself (per the KiCad PCM specification).
 | Symptom | Fix |
 |---------|-----|
 | PCM rejects the zip | Ensure you ran the build script — do not manually re-zip the exploded directory, as path order matters |
-| Plugin does not appear in Tools → External Plugins | In PCM uninstall KiCad2Fritzing, close KiCad, reinstall from `dist/KiCad2Fritzing-pcm.zip`, then restart KiCad |
+| Plugin does not appear in Tools → External Plugins | In PCM uninstall PCB to Fritzing Part, close KiCad, reinstall from `dist/PCB2FritzingPart-pcm.zip`, then restart KiCad |
 | Import error on run | Check the KiCad scripting console (`pcbnew` → View → Scripting Console) for the Python traceback |
 | `pcbnew` module not found | The plugin must be run from inside KiCad; it cannot be executed standalone |
 | Reveal Plugins folder is empty | Expected for PCM installs in KiCad 10. PCM installs plugin packages under `~/Documents/KiCad/10.0/3rdparty/plugins/<package-id>/`, not in the legacy `scripting/plugins` folder |
-| Still missing after reinstall | Check for `kicad2fritzing_plugin_discovery.log` under `~/Documents/KiCad/10.0/3rdparty/plugins/com_github_<username>_kicad2fritzing/`; share the contents to diagnose |
+| Still missing after reinstall | Check for `pcb2fritzing_plugin_discovery.log` under `~/Documents/KiCad/10.0/3rdparty/plugins/com_github_<username>_pcb2fritzing/`; share the contents to diagnose |
 | SWIG bindings unavailable | KiCad 10 deprecated SWIG Python bindings; they may not be included or enabled in your KiCad build. Check the log file for `✗ pcbnew import failed` message |
 

@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from kicad2fritzing.core.extractor import (
+from pcb2fritzing.core.extractor import (
     build_fritzing_part_fzp,
     export_board_to_fritzing_stub,
     map_model_to_fritzing_connectors,

@@ -12,7 +12,7 @@ import subprocess
 from xml.etree import ElementTree as ET
 from pathlib import Path
 
-from kicad2fritzing.core.extractor import build_fritzing_package_zip, export_board_to_fritzing_stub
+from pcb2fritzing.core.extractor import build_fritzing_package_zip, export_board_to_fritzing_stub
 
 try:
     import pcbnew  # type: ignore
@@ -544,15 +544,15 @@ def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
     return True
 
 
-class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
-    """Dialog for KiCad to Fritzing part generation settings."""
+class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
+    """Dialog for PCB to Fritzing Part generation settings."""
 
     def __init__(self, parent, board_path: Path) -> None:
         """Initialize dialog with default values from board path."""
         if wx is None:
             raise RuntimeError("wxPython not available")
         
-        wx.Dialog.__init__(self, parent, title="KiCad to Fritzing Part Generation", size=(720, 510))
+        wx.Dialog.__init__(self, parent, title="PCB to Fritzing Part", size=(720, 510))
         self.board_path = board_path
         self.project_dir = board_path.parent.resolve()
         
@@ -902,13 +902,13 @@ class KiCad2FritzingDialog(wx.Dialog if wx else object):  # type: ignore
         )
 
 
-class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
+class PCBtoFritzingPartActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
     """Action plugin wrapper for KiCad's PCB Editor."""
 
     def defaults(self) -> None:
-        self.name = "KiCad to Fritzing"
+        self.name = "PCB to Fritzing Part"
         self.category = "Export"
-        self.description = "Export current KiCad board into Fritzing starter assets"
+        self.description = "Export current KiCad PCB into Fritzing starter assets"
         self.show_toolbar_button = True
 
     def Run(self) -> None:  # noqa: N802 - KiCad API uses Run
@@ -927,7 +927,7 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
             )
             return
         
-        dlg = KiCad2FritzingDialog(None, board_path)
+        dlg = PCBtoFritzingPartDialog(None, board_path)
         if dlg.ShowModal() == wx.ID_OK:
             (
                 part_name,
@@ -1018,5 +1018,5 @@ def register_plugin() -> bool:
     if pcbnew is None:
         return False
 
-    KiCad2FritzingActionPlugin().register()
+    PCBtoFritzingPartActionPlugin().register()
     return True

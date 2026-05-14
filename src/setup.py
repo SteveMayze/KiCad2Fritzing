@@ -2,7 +2,7 @@ from setuptools import find_packages, setup
 
 
 setup(
-    name="kicad2fritzing",
+    name="pcb2fritzing",
     version="0.1.0",
     description="Generate Fritzing-compatible parts from KiCad board data",
     packages=find_packages(),
@@ -14,7 +14,7 @@ setup(
     },
     entry_points={
         "console_scripts": [
-            "kicad2fritzing=kicad2fritzing.cli:main",
+            "pcb2fritzing=pcb2fritzing.cli:main",
         ]
     },
 )

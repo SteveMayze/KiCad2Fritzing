@@ -1,4 +1,4 @@
-"""Command-line entry point for KiCad2Fritzing."""
+"""Command-line entry point for pcb2fritzing."""
 
 from __future__ import annotations
 
@@ -6,13 +6,13 @@ import argparse
 import logging
 from pathlib import Path
 
-from kicad2fritzing.core.extractor import build_fritzing_package_zip, export_board_to_fritzing_stub
-from kicad2fritzing.kicad.plugin import embed_3d_render_in_breadboard_svg, render_board_3d
+from pcb2fritzing.core.extractor import build_fritzing_package_zip, export_board_to_fritzing_stub
+from pcb2fritzing.kicad.plugin import embed_3d_render_in_breadboard_svg, render_board_3d
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="kicad2fritzing",
+        prog="pcb2fritzing",
         description="Generate Fritzing-friendly outputs from KiCad board layouts.",
     )
     parser.add_argument("board_file", type=Path, help="Path to a KiCad .kicad_pcb file")
