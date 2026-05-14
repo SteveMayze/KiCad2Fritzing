@@ -18,6 +18,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 from xml.etree import ElementTree as ET
 from pathlib import Path
 
@@ -512,10 +513,16 @@ def _create_temp_board_for_render(
     board_file: Path,
     soldermask_color: str,
     silkscreen_color: str,
-) -> "Path | None":
+) -> "tuple[Path, Path] | None":
     """Return a temporary .kicad_pcb with custom stackup colours, or None on failure.
 
-    The caller is responsible for deleting the returned file after use.
+    Returns ``(temp_board_path, temp_dir_path)``.
+    The caller is responsible for deleting the returned directory tree.
+
+    The temporary board keeps the original filename and is written into a
+    temporary sibling directory. Matching ``.kicad_pro``/``.kicad_prl`` files
+    are copied alongside it so kicad-cli resolves project context similarly to
+    the original board.
     """
     try:
         content = board_file.read_text(encoding="utf-8")
@@ -561,12 +568,18 @@ def _create_temp_board_for_render(
         content = _patch_stackup_layer_color(content, "F.SilkS", silkscreen_color)
         content = _patch_stackup_layer_color(content, "B.SilkS", silkscreen_color)
 
-    tmp_path = board_file.parent / f"_k2f_tmp_{board_file.stem}.kicad_pcb"
+    tmp_dir = Path(tempfile.mkdtemp(prefix="_k2f_tmp_render_", dir=str(board_file.parent)))
+    tmp_path = tmp_dir / board_file.name
     try:
         tmp_path.write_text(content, encoding="utf-8")
+        for suffix in (".kicad_pro", ".kicad_prl", ".kicad_dru"):
+            source_meta = board_file.with_suffix(suffix)
+            if source_meta.exists():
+                shutil.copy2(source_meta, tmp_dir / source_meta.name)
     except OSError:
+        shutil.rmtree(tmp_dir, ignore_errors=True)
         return None
-    return tmp_path
+    return (tmp_path, tmp_dir)
 
 
 def _find_kicad_cli(override: str | None) -> str | None:
@@ -614,12 +627,14 @@ def render_board_3d(
     board_file = board_file.resolve()
     render_source = board_file
     tmp_board: "Path | None" = None
+    tmp_dir: "Path | None" = None
 
     if soldermask_color or silkscreen_color:
         sm = soldermask_color or "#2b5f82"
         sk = silkscreen_color or "#f5f5f5"
-        tmp_board = _create_temp_board_for_render(board_file, sm, sk)
-        if tmp_board is not None:
+        tmp_render_files = _create_temp_board_for_render(board_file, sm, sk)
+        if tmp_render_files is not None:
+            tmp_board, tmp_dir = tmp_render_files
             render_source = tmp_board
 
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -657,12 +672,28 @@ def render_board_3d(
         lines = value.splitlines()
         return " | ".join(lines[-3:])
 
-    def _run_render(source_path: Path, label: str) -> bool:
+    def _has_full_frame_haze(image_path: Path) -> bool:
+        try:
+            metrics = _png_image_metrics(image_path.read_bytes(), alpha_threshold=240)
+        except OSError:
+            return False
+        if metrics is None:
+            return False
+        img_w_px, img_h_px, alpha_bounds = metrics
+        if alpha_bounds is None:
+            return False
+        min_x_px, min_y_px, max_x_px, max_y_px = alpha_bounds
+        content_w_px = max(1, max_x_px - min_x_px)
+        content_h_px = max(1, max_y_px - min_y_px)
+        area_ratio = (content_w_px * content_h_px) / max(1, img_w_px * img_h_px)
+        return area_ratio >= 0.995
+
+    def _run_render(source_path: Path, label: str, quality: str = "high") -> bool:
         cmd = [
             cli, "pcb", "render",
             "--side", "top",
             "--background", "transparent",
-            "--quality", "high",
+            "--quality", quality,
             "--width", str(width_px),
             "--height", str(height_px),
             "--output", str(render_path),
@@ -673,7 +704,7 @@ def render_board_3d(
                 cmd,
                 capture_output=True,
                 timeout=120,
-                cwd=str(board_file.parent),
+                cwd=str(source_path.parent),
             )
         except subprocess.TimeoutExpired:
             _diag(f"  kicad-cli render ({label}) timed out after 120s.")
@@ -683,6 +714,9 @@ def render_board_3d(
             return False
 
         if result.returncode == 0 and render_path.exists():
+            if quality == "high" and _has_full_frame_haze(render_path):
+                _diag(f"  kicad-cli render ({label}) detected full-frame haze; retrying with basic quality.")
+                return _run_render(source_path, f"{label} basic-quality retry", quality="basic")
             return True
 
         stderr_summary = _summarize_output(result.stderr)
@@ -703,12 +737,14 @@ def render_board_3d(
         if render_source != board_file:
             _diag("  Retrying 3D render with original board file (no temporary color patch)...")
             if _run_render(board_file, "original board"):
-                _diag("  Fallback render succeeded using original board file.")
+                _diag("  Fallback render succeeded using original board file (stackup colors may differ).")
                 return render_path
 
         return None
     finally:
-        if tmp_board is not None:
+        if tmp_dir is not None:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+        elif tmp_board is not None:
             try:
                 tmp_board.unlink(missing_ok=True)
             except OSError:
