@@ -258,6 +258,119 @@ def _normalize_hex_color(value: str, fallback: str) -> str:
     return fallback
 
 
+def _find_sexp_block(content: str, marker: str, search_start: int = 0) -> "tuple[int, int] | None":
+    """Return (start, end) character positions of an S-expr block beginning with *marker*.
+
+    *end* is exclusive (points one past the closing parenthesis).
+    Returns None if the marker is not found or the block is unclosed.
+    """
+    pos = content.find(marker, search_start)
+    if pos == -1:
+        return None
+    depth = 0
+    i = pos
+    while i < len(content):
+        ch = content[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return (pos, i + 1)
+        i += 1
+    return None
+
+
+def _patch_stackup_layer_color(content: str, layer_name: str, color: str) -> str:
+    """Within the (stackup ...) block, set the (color ...) entry of a named layer."""
+    stackup_range = _find_sexp_block(content, "(stackup")
+    if stackup_range is None:
+        return content
+    stackup_start, stackup_end = stackup_range
+    stackup = content[stackup_start:stackup_end]
+
+    layer_marker = f'(layer "{layer_name}"'
+    layer_range = _find_sexp_block(stackup, layer_marker)
+    if layer_range is None:
+        return content
+    layer_start, layer_end = layer_range
+    block = stackup[layer_start:layer_end]
+
+    color_re = re.compile(r'\(color\s+"[^"]*"\)')
+    if color_re.search(block):
+        new_block = color_re.sub(f'(color "{color}")', block)
+    else:
+        # Insert (color "...") before the closing ) of the block.
+        insert_pos = len(block) - 1
+        while insert_pos > 0 and block[insert_pos - 1] in " \t\n\r":
+            insert_pos -= 1
+        new_block = block[:insert_pos] + f'\n\t\t\t\t(color "{color}"))' + block[insert_pos + 1:]
+
+    new_stackup = stackup[:layer_start] + new_block + stackup[layer_end:]
+    return content[:stackup_start] + new_stackup + content[stackup_end:]
+
+
+def _create_temp_board_for_render(
+    board_file: Path,
+    soldermask_color: str,
+    silkscreen_color: str,
+) -> "Path | None":
+    """Return a temporary .kicad_pcb with custom stackup colours, or None on failure.
+
+    The caller is responsible for deleting the returned file after use.
+    """
+    try:
+        content = board_file.read_text(encoding="utf-8")
+    except OSError:
+        return None
+
+    if "(stackup" not in content:
+        # Inject a minimal stackup block inside (setup ...) so KiCad renders
+        # with the requested board colours.
+        stackup_block = (
+            "\t\t(stackup\n"
+            f'\t\t\t(layer "F.SilkS"\n'
+            f'\t\t\t\t(type "Top Silk Screen")\n'
+            f'\t\t\t\t(color "{silkscreen_color}"))\n'
+            f'\t\t\t(layer "B.SilkS"\n'
+            f'\t\t\t\t(type "Bottom Silk Screen")\n'
+            f'\t\t\t\t(color "{silkscreen_color}"))\n'
+            f'\t\t\t(layer "F.Paste"\n'
+            f'\t\t\t\t(type "Top Solder Paste"))\n'
+            f'\t\t\t(layer "B.Paste"\n'
+            f'\t\t\t\t(type "Bottom Solder Paste"))\n'
+            f'\t\t\t(layer "F.Mask"\n'
+            f'\t\t\t\t(type "Top Solder Mask")\n'
+            f'\t\t\t\t(color "{soldermask_color}"))\n'
+            f'\t\t\t(layer "B.Mask"\n'
+            f'\t\t\t\t(type "Bottom Solder Mask")\n'
+            f'\t\t\t\t(color "{soldermask_color}"))\n'
+            "\t\t)\n"
+        )
+        setup_range = _find_sexp_block(content, "(setup")
+        if setup_range is not None:
+            s_start, s_end = setup_range
+            setup_block = content[s_start:s_end]
+            nl_pos = setup_block.find("\n")
+            if nl_pos != -1:
+                new_setup = setup_block[: nl_pos + 1] + stackup_block + setup_block[nl_pos + 1:]
+            else:
+                new_setup = setup_block[:-1] + "\n" + stackup_block + ")"
+            content = content[:s_start] + new_setup + content[s_end:]
+    else:
+        content = _patch_stackup_layer_color(content, "F.Mask", soldermask_color)
+        content = _patch_stackup_layer_color(content, "B.Mask", soldermask_color)
+        content = _patch_stackup_layer_color(content, "F.SilkS", silkscreen_color)
+        content = _patch_stackup_layer_color(content, "B.SilkS", silkscreen_color)
+
+    tmp_path = board_file.parent / f"_k2f_tmp_{board_file.stem}.kicad_pcb"
+    try:
+        tmp_path.write_text(content, encoding="utf-8")
+    except OSError:
+        return None
+    return tmp_path
+
+
 def _find_kicad_cli(override: str | None) -> str | None:
     """Locate the kicad-cli executable, returning its path or None."""
     if override:
@@ -280,8 +393,16 @@ def render_board_3d(
     out_dir: Path,
     board_bounds_mm: dict | None = None,
     kicad_cli_path: str | None = None,
+    soldermask_color: str | None = None,
+    silkscreen_color: str | None = None,
 ) -> "Path | None":
     """Render the board top-down using kicad-cli and return the PNG path.
+
+    When *soldermask_color* or *silkscreen_color* are provided the board's
+    stackup colours are patched in a temporary copy of the board file before
+    rendering so that the 3D image matches the colours chosen in the dialog.
+    The temporary file is deleted after the render completes regardless of
+    whether the render succeeds.
 
     Uses orthogonal (non-perspective) projection so component positions map
     exactly onto their XY footprint coordinates regardless of part height.
@@ -292,6 +413,16 @@ def render_board_3d(
         return None
 
     board_file = board_file.resolve()
+    render_source = board_file
+    tmp_board: "Path | None" = None
+
+    if soldermask_color or silkscreen_color:
+        sm = soldermask_color or "#2b5f82"
+        sk = silkscreen_color or "#f5f5f5"
+        tmp_board = _create_temp_board_for_render(board_file, sm, sk)
+        if tmp_board is not None:
+            render_source = tmp_board
+
     out_dir.mkdir(parents=True, exist_ok=True)
     render_path = (out_dir / "board_render.png").resolve()
 
@@ -315,7 +446,7 @@ def render_board_3d(
         "--width", str(width_px),
         "--height", str(height_px),
         "--output", str(render_path),
-        str(board_file),
+        str(render_source),
     ]
     try:
         result = subprocess.run(cmd, capture_output=True, timeout=120, cwd=str(board_file.parent))
@@ -323,6 +454,12 @@ def render_board_3d(
             return render_path
     except Exception:  # noqa: BLE001
         pass
+    finally:
+        if tmp_board is not None:
+            try:
+                tmp_board.unlink(missing_ok=True)
+            except OSError:
+                pass
     return None
 
 
@@ -859,6 +996,8 @@ class KiCad2FritzingActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
                     out_dir / "kicad_svg_plots",
                     board_bounds_mm=board_bounds_mm,
                     kicad_cli_path=kicad_cli_path or None,
+                    soldermask_color=soldermask_color,
+                    silkscreen_color=silkscreen_color,
                 )
                 if render_png:
                     embed_3d_render_in_breadboard_svg(out_dir, render_png)

@@ -50,6 +50,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to kicad-cli executable (auto-detected when omitted)",
     )
     parser.add_argument(
+        "--soldermask-color",
+        type=str,
+        default=None,
+        metavar="COLOR",
+        help="Soldermask hex colour for the 3D render, e.g. #2b5f82 (uses board default when omitted)",
+    )
+    parser.add_argument(
+        "--silkscreen-color",
+        type=str,
+        default=None,
+        metavar="COLOR",
+        help="Silkscreen hex colour for the 3D render, e.g. #f5f5f5 (uses board default when omitted)",
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         help="Enable debug logging",
@@ -89,6 +103,8 @@ def main() -> int:
             args.out_dir / "kicad_svg_plots",
             board_bounds_mm=board_bounds_mm,
             kicad_cli_path=args.kicad_cli_path,
+            soldermask_color=args.soldermask_color,
+            silkscreen_color=args.silkscreen_color,
         )
         if render_png:
             embed_3d_render_in_breadboard_svg(args.out_dir, render_png)
