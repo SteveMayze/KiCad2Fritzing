@@ -52,6 +52,10 @@
 - Add optional CLI flags for `--part-family` and `--part-type` parity with plugin dialog metadata controls.
 - Add round-trip checks using Fritzing import/export where practical.
 - Add tests around plugin behavior and end-to-end integration flow.
+- Plan migration away from deprecated KiCad SWIG Python bindings to the supported IPC plugin framework:
+	- inventory current SWIG-dependent code paths in plugin/export flow,
+	- design an IPC-backed adapter layer to preserve current CLI/plugin behavior,
+	- implement and validate IPC-based plugin execution on KiCad 10+ while keeping test coverage green.
 - Refine the KiCad plugin dialog UX after the updated Balsamiq draft is ready:
 	- review field layout/labels and default value presentation,
 	- apply control validation and input hints where needed,
