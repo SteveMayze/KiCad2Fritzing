@@ -640,17 +640,9 @@ def render_board_3d(
     out_dir.mkdir(parents=True, exist_ok=True)
     render_path = (out_dir / "board_render.png").resolve()
 
-    # Compute pixel dimensions matching the board aspect ratio so we can
-    # later use preserveAspectRatio="none" for a pixel-perfect fit.
+    # Use a square render target to avoid project-dependent zoom-out behavior
+    # seen on some boards when a board-aspect canvas is forced.
     width_px, height_px = 2000, 2000
-    if board_bounds_mm:
-        bw = board_bounds_mm.get("max_x", 1.0) - board_bounds_mm.get("min_x", 0.0)
-        bh = board_bounds_mm.get("max_y", 1.0) - board_bounds_mm.get("min_y", 0.0)
-        if bw > 0 and bh > 0:
-            if bw >= bh:
-                height_px = max(100, round(2000 * bh / bw))
-            else:
-                width_px = max(100, round(2000 * bw / bh))
 
     def _diag(msg: str) -> None:
         if diagnostics is not None:
@@ -693,6 +685,7 @@ def render_board_3d(
             cli, "pcb", "render",
             "--side", "top",
             "--background", "transparent",
+            "--preset", "follow_pcb_editor",
             "--quality", quality,
             "--width", str(width_px),
             "--height", str(height_px),
@@ -770,6 +763,7 @@ def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
     if board_bounds is None:
         return False
     bx, by, bw, bh = board_bounds
+    target_aspect = bw / bh if bh > 0 else None
 
     # Locate boardOutline, strip its fill, capture its polygon points.
     board_outline_points = ""
@@ -832,10 +826,13 @@ def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
     # kicad-cli high-quality renders can include low-alpha haze/shadow across
     # the full canvas. Detect the meaningful alpha content bounds and remap the
     # image so the board area aligns with boardOutline dimensions.
-    # Prefer aggressive thresholds first so soft shadows/haze do not expand the
-    # fitted bounds. Fall back progressively for edge cases.
+    # Pick the largest non-full alpha-content region across thresholds. This
+    # avoids over-tight fits (which can shrink dark boards) while still
+    # trimming low-alpha full-frame haze when present.
     selected_metrics: tuple[int, int, tuple[int, int, int, int] | None] | None = None
-    for threshold in (224, 192, 160, 128, 96):
+    selected_aspect_error = float("inf")
+    selected_area_ratio = -1.0
+    for threshold in (16, 24, 32, 48, 64, 96, 128, 160, 192, 224):
         metrics = _png_image_metrics(png_bytes, alpha_threshold=threshold)
         if metrics is None:
             continue
@@ -846,11 +843,23 @@ def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
         content_w_px = max(1, max_x_px - min_x_px)
         content_h_px = max(1, max_y_px - min_y_px)
         area_ratio = (content_w_px * content_h_px) / max(1, img_w_px * img_h_px)
+        aspect = content_w_px / content_h_px if content_h_px > 0 else 0.0
+        aspect_error = abs(aspect - target_aspect) if target_aspect is not None else 0.0
 
-        selected_metrics = metrics
-        # Accept the first threshold that trims at least a little border.
-        if area_ratio < 0.995:
-            break
+        # Ignore full-frame selections (typically haze) and prefer the content
+        # box whose aspect ratio best matches the actual board outline.
+        if area_ratio >= 0.999:
+            continue
+        if (
+            aspect_error < selected_aspect_error - 1e-6
+            or (
+                abs(aspect_error - selected_aspect_error) <= 1e-6
+                and area_ratio > selected_area_ratio
+            )
+        ):
+            selected_aspect_error = aspect_error
+            selected_area_ratio = area_ratio
+            selected_metrics = metrics
 
     if selected_metrics is not None:
         img_w_px, img_h_px, alpha_bounds = selected_metrics
