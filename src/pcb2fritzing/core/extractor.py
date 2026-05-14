@@ -52,7 +52,7 @@ HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 DEFAULT_RENDER_OPTIONS = {
     "soldermask_color": "#2b5f82",
     "silkscreen_color": "#f5f5f5",
-    "pad_scale": 1.0,
+    "pad_scale": 0.75,
     "silk_text_scale": 1.15,
     "include_component_silkscreen": False,
     "include_fab_layer": False,

@@ -3,6 +3,12 @@
 from __future__ import annotations
 
 import base64
+from io import BytesIO
+try:
+    from PIL import Image, ImageEnhance
+    _PIL_AVAILABLE = True
+except ImportError:
+    _PIL_AVAILABLE = False
 import copy
 import json
 import os
@@ -546,7 +552,24 @@ def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
     if board_outline_points:
         group_attrs["clip-path"] = "url(#boardClip)"
     render_group = ET.Element(f"{{{SVG_NS}}}g", group_attrs)
-    png_data = base64.b64encode(render_path.read_bytes()).decode("ascii")
+    # --- Soft shadow suppression: post-process PNG to reduce shadow opacity/contrast ---
+    if _PIL_AVAILABLE:
+        try:
+            with Image.open(render_path) as im:
+                im = im.convert("RGBA")
+                r, g, b, a = im.split()
+                shadow_mask = Image.eval(r, lambda px: 255 if px < 64 else 0)
+                light = ImageEnhance.Brightness(im).enhance(1.5)
+                im = Image.composite(light, im, shadow_mask)
+                im = ImageEnhance.Contrast(im).enhance(0.92)
+                buf = BytesIO()
+                im.save(buf, format="PNG")
+                png_bytes = buf.getvalue()
+        except Exception:
+            png_bytes = render_path.read_bytes()
+    else:
+        png_bytes = render_path.read_bytes()
+    png_data = base64.b64encode(png_bytes).decode("ascii")
     ET.SubElement(
         render_group,
         f"{{{SVG_NS}}}image",
@@ -677,7 +700,7 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
 
         # Pad/Pin scaling (moved up to after color pickers)
         pad_scale_label = wx.StaticText(panel, label="Pad/Pin Scaling:")
-        self.pad_scale_input = wx.TextCtrl(panel, value="1.0", size=(120, -1))
+        self.pad_scale_input = wx.TextCtrl(panel, value="0.75", size=(120, -1))
         pad_scale_sizer = wx.BoxSizer(wx.HORIZONTAL)
         pad_scale_sizer.Add(pad_scale_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
         pad_scale_sizer.Add(self.pad_scale_input, 0)
@@ -688,7 +711,7 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
             panel,
             label="Photorealistic 3D render (requires kicad-cli)",
         )
-        self.use_3d_render.SetValue(False)
+        self.use_3d_render.SetValue(True)
         self.use_3d_render.Bind(wx.EVT_CHECKBOX, self._on_3d_render_toggle)
         sizer.Add(self.use_3d_render, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 

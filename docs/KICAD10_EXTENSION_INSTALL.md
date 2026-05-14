@@ -87,6 +87,6 @@ not in the archive itself (per the KiCad PCM specification).
 | Import error on run | Check the KiCad scripting console (`pcbnew` → View → Scripting Console) for the Python traceback |
 | `pcbnew` module not found | The plugin must be run from inside KiCad; it cannot be executed standalone |
 | Reveal Plugins folder is empty | Expected for PCM installs in KiCad 10. PCM installs plugin packages under `~/Documents/KiCad/10.0/3rdparty/plugins/<package-id>/`, not in the legacy `scripting/plugins` folder |
-| Still missing after reinstall | Check for `pcb2fritzing_plugin_discovery.log` under `~/Documents/KiCad/10.0/3rdparty/plugins/com_github_<username>_pcb2fritzing/`; share the contents to diagnose |
+| Still missing after reinstall | Print the plugin discovery log and share it: `cat ~/Documents/KiCad/10.0/3rdparty/plugins/com_github_SteveMayze_pcb2fritzing/pcb2fritzing_plugin_discovery.log` (or replace `SteveMayze` with your own package username if different) |
 | SWIG bindings unavailable | KiCad 10 deprecated SWIG Python bindings; they may not be included or enabled in your KiCad build. Check the log file for `✗ pcbnew import failed` message |
 

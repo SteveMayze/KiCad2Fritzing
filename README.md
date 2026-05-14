@@ -4,6 +4,14 @@ A KiCad Action Plugin (and CLI utility) for generating Fritzing-compatible part 
 
 ## Overview
 
+### Visual Comparison: KiCad PCB vs Fritzing Import
+
+| KiCad PCB (source) | Fritzing Import (generated) |
+|:------------------:|:--------------------------:|
+| ![KiCad PCB](docs/KiCad-PCB-Sample.png) | ![Fritzing Part](docs/Fritzing-Part-Sample.png) |
+
+*Left: Original board in KiCad. Right: Generated part imported into Fritzing (photorealistic 3D mode, pads/labels preserved).*
+
 This project is aimed at making documentation easier by converting KiCad board information into a Fritzing part that can be dropped into wiring diagrams.
 
 Current status:
@@ -77,6 +85,15 @@ KiCad plugin dialog behavior (current):
 - `Output messages` shows step-by-step diagnostics during export.
 - `Save...` writes diagnostics to a text file for troubleshooting.
 - In photorealistic 3D mode, 2D silkscreen overlays are removed before embedding the 3D render to avoid ghosting/double text.
+
+Known limitation (photorealistic mode):
+- Some boards may still show subtle shadow artifacts in the embedded 3D render.
+- This does not affect connector IDs, pin mapping, or generated package validity.
+
+Optional unsupported workaround:
+- If Pillow (`PIL`) is available in KiCad's Python runtime, the plugin applies a soft shadow suppression pass before embedding the render.
+- If Pillow is not installed, export continues normally with no failure; only the suppression pass is skipped.
+- This is intentionally optional to keep public plugin installs dependency-free.
 
 ## KiCad Extension Direction
 
