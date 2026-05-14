@@ -153,4 +153,5 @@ tests/external_projects.local.json
 
 sample-screenshots/
 */.DS_Store
+test_export_output/
 
