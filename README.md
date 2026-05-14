@@ -72,6 +72,12 @@ Fritzing metadata fields can be customized from the KiCad plugin dialog:
 
 These values are written into the generated `.fzp` under `<properties>` and influence how Fritzing categorizes and indexes the part.
 
+KiCad plugin dialog behavior (current):
+- `Generate` runs export without closing the dialog; use `Close` to dismiss it.
+- `Output messages` shows step-by-step diagnostics during export.
+- `Save...` writes diagnostics to a text file for troubleshooting.
+- In photorealistic 3D mode, 2D silkscreen overlays are removed before embedding the 3D render to avoid ghosting/double text.
+
 ## KiCad Extension Direction
 
 The Action Plugin scaffold is available in `src/pcb2fritzing/kicad/plugin.py`.

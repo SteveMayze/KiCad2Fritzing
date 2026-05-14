@@ -104,6 +104,33 @@ def _remove_custom_silkscreen_elements(svg_root: ET.Element, silkscreen_color: s
     recurse(svg_root)
 
 
+def strip_silkscreen_overlays_for_3d(
+    out_dir: Path,
+    silkscreen_color: str = "#f5f5f5",
+) -> bool:
+    """Remove 2D silkscreen overlays from breadboard SVG before 3D embedding.
+
+    In photorealistic mode, silkscreen is already present in the 3D render.
+    Keeping 2D overlays causes ghosting/double text.
+    """
+    breadboard_svg_path = out_dir / "breadboard.svg"
+    if not breadboard_svg_path.exists():
+        return False
+
+    ET.register_namespace("", SVG_NS)
+    tree = ET.parse(breadboard_svg_path)
+    root = tree.getroot()
+
+    # Remove any prior KiCad-native overlay group if present.
+    for elem in list(root):
+        if elem.attrib.get("id") == "kicadNativeOverlay":
+            root.remove(elem)
+
+    _remove_custom_silkscreen_elements(root, silkscreen_color)
+    tree.write(breadboard_svg_path, encoding="utf-8", xml_declaration=False)
+    return True
+
+
 def overlay_kicad_plots_on_breadboard(
     out_dir: Path,
     plotted: dict[str, Path],
@@ -547,13 +574,14 @@ def embed_3d_render_in_breadboard_svg(out_dir: Path, render_path: Path) -> bool:
 class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
     """Dialog for PCB to Fritzing Part generation settings."""
 
-    def __init__(self, parent, board_path: Path) -> None:
+    def __init__(self, parent, board_path: Path, board=None) -> None:
         """Initialize dialog with default values from board path."""
         if wx is None:
             raise RuntimeError("wxPython not available")
         
-        wx.Dialog.__init__(self, parent, title="PCB to Fritzing Part", size=(720, 510))
+        wx.Dialog.__init__(self, parent, title="PCB to Fritzing Part", size=(720, 750))
         self.board_path = board_path
+        self.board = board
         self.project_dir = board_path.parent.resolve()
         
         # Panel setup
@@ -635,7 +663,49 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
         metadata_sizer.Add(self.part_type_input, 1)
         sizer.Add(metadata_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
 
-        # Advanced 2D silkscreen/body options
+        # Render colors
+        color_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        soldermask_label = wx.StaticText(panel, label="Soldermask color:")
+        self.soldermask_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#2b5f82"))
+        self.silkscreen_color_label = wx.StaticText(panel, label="Silkscreen color:")
+        self.silkscreen_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#f5f5f5"))
+        color_sizer.Add(soldermask_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        color_sizer.Add(self.soldermask_color_input, 0, wx.RIGHT, 22)
+        color_sizer.Add(self.silkscreen_color_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        color_sizer.Add(self.silkscreen_color_input, 0)
+        sizer.Add(color_sizer, 0, wx.ALL, 10)
+
+        # Pad/Pin scaling (moved up to after color pickers)
+        pad_scale_label = wx.StaticText(panel, label="Pad/Pin Scaling:")
+        self.pad_scale_input = wx.TextCtrl(panel, value="1.0", size=(120, -1))
+        pad_scale_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        pad_scale_sizer.Add(pad_scale_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
+        pad_scale_sizer.Add(self.pad_scale_input, 0)
+        sizer.Add(pad_scale_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        # Photorealistic 3D render
+        self.use_3d_render = wx.CheckBox(
+            panel,
+            label="Photorealistic 3D render (requires kicad-cli)",
+        )
+        self.use_3d_render.SetValue(False)
+        self.use_3d_render.Bind(wx.EVT_CHECKBOX, self._on_3d_render_toggle)
+        sizer.Add(self.use_3d_render, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+
+        kicad_cli_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        self.kicad_cli_label = wx.StaticText(panel, label="kicad-cli path:")
+        self.kicad_cli_path_input = wx.TextCtrl(
+            panel, value=_find_kicad_cli(None) or "", size=(320, -1)
+        )
+        self.kicad_cli_detect_btn = wx.Button(panel, label="Detect", size=(70, -1))
+        self.kicad_cli_detect_btn.Bind(wx.EVT_BUTTON, self._on_detect_kicad_cli)
+        kicad_cli_sizer.Add(self.kicad_cli_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        kicad_cli_sizer.Add(self.kicad_cli_path_input, 1, wx.RIGHT, 5)
+        kicad_cli_sizer.Add(self.kicad_cli_detect_btn, 0)
+        sizer.Add(kicad_cli_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+        self._sync_3d_render_controls()
+
+        # Advanced 2D silkscreen/body options (moved down to after 3D render)
         self.silkscreen_options_label = wx.StaticText(
             panel,
             label="Advanced 2D overlays (optional):",
@@ -659,49 +729,6 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
         silkscreen_sizer.Add(self.include_fab_layer, 0, wx.BOTTOM, 8)
 
         sizer.Add(silkscreen_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-
-        # Photorealistic 3D render
-        self.use_3d_render = wx.CheckBox(
-            panel,
-            label="Photorealistic 3D render (requires kicad-cli)",
-        )
-        self.use_3d_render.SetValue(False)
-        self.use_3d_render.Bind(wx.EVT_CHECKBOX, self._on_3d_render_toggle)
-        sizer.Add(self.use_3d_render, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
-
-        kicad_cli_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        self.kicad_cli_label = wx.StaticText(panel, label="kicad-cli path:")
-        self.kicad_cli_path_input = wx.TextCtrl(
-            panel, value=_find_kicad_cli(None) or "", size=(320, -1)
-        )
-        self.kicad_cli_detect_btn = wx.Button(panel, label="Detect", size=(70, -1))
-        self.kicad_cli_detect_btn.Bind(wx.EVT_BUTTON, self._on_detect_kicad_cli)
-        kicad_cli_sizer.Add(self.kicad_cli_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        kicad_cli_sizer.Add(self.kicad_cli_path_input, 1, wx.RIGHT, 5)
-        kicad_cli_sizer.Add(self.kicad_cli_detect_btn, 0)
-        sizer.Add(kicad_cli_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
-        self._sync_3d_render_controls()
-        self._sync_advanced_overlay_controls()
-        
-        # Render colors
-        color_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        soldermask_label = wx.StaticText(panel, label="Soldermask color:")
-        self.soldermask_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#2b5f82"))
-        self.silkscreen_color_label = wx.StaticText(panel, label="Silkscreen color:")
-        self.silkscreen_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#f5f5f5"))
-        color_sizer.Add(soldermask_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        color_sizer.Add(self.soldermask_color_input, 0, wx.RIGHT, 22)
-        color_sizer.Add(self.silkscreen_color_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        color_sizer.Add(self.silkscreen_color_input, 0)
-        sizer.Add(color_sizer, 0, wx.ALL, 10)
-
-        # Pad/Pin scaling
-        pad_scale_label = wx.StaticText(panel, label="Pad/Pin Scaling:")
-        self.pad_scale_input = wx.TextCtrl(panel, value="1.0", size=(120, -1))
-        pad_scale_sizer = wx.BoxSizer(wx.HORIZONTAL)
-        pad_scale_sizer.Add(pad_scale_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 10)
-        pad_scale_sizer.Add(self.pad_scale_input, 0)
-        sizer.Add(pad_scale_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
         
         # KiCad-native silkscreen toggle (default on for alpha/beta diagnostics)
         self.use_kicad_native_overlay = wx.CheckBox(
@@ -711,6 +738,8 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
         self.use_kicad_native_overlay.SetValue(True)
         self.use_kicad_native_overlay.Bind(wx.EVT_CHECKBOX, self._on_native_overlay_toggle)
         sizer.Add(self.use_kicad_native_overlay, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
+        
+        self._sync_advanced_overlay_controls()
 
         # Text Scaling
         scale_label = wx.StaticText(panel, label="Text scaling (custom renderer only):")
@@ -729,14 +758,31 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
 
         # Native overlay bypasses custom text scaling; disable to avoid confusion.
         self._sync_text_scaling_controls()
+
+        # Output messages panel
+        output_label = wx.StaticText(panel, label="Output messages:")
+        sizer.Add(output_label, 0, wx.LEFT | wx.RIGHT | wx.TOP, 10)
         
-        # Buttons
+        self.output_messages = wx.TextCtrl(
+            panel,
+            value="",
+            style=wx.TE_MULTILINE | wx.TE_READONLY | wx.TE_WORDWRAP,
+            size=(-1, 120)
+        )
+        sizer.Add(self.output_messages, 1, wx.LEFT | wx.RIGHT | wx.BOTTOM | wx.EXPAND, 10)
+        
+        # Buttons with Save... button
         btn_sizer = wx.BoxSizer(wx.HORIZONTAL)
+        save_btn = wx.Button(panel, label="Save...")
+        save_btn.Bind(wx.EVT_BUTTON, self._on_save_messages)
         close_btn = wx.Button(panel, wx.ID_CANCEL, "Close")
-        generate_btn = wx.Button(panel, wx.ID_OK, "Generate")
+        self.generate_btn = wx.Button(panel, label="Generate")
+        self.generate_btn.Bind(wx.EVT_BUTTON, self._on_generate)
+        btn_sizer.Add(save_btn, 0, wx.RIGHT, 10)
+        btn_sizer.AddStretchSpacer()
         btn_sizer.Add(close_btn, 0, wx.RIGHT, 10)
-        btn_sizer.Add(generate_btn, 0)
-        sizer.Add(btn_sizer, 0, wx.ALL | wx.ALIGN_RIGHT, 10)
+        btn_sizer.Add(self.generate_btn, 0)
+        sizer.Add(btn_sizer, 0, wx.ALL | wx.EXPAND, 10)
         
         panel.SetSizer(sizer)
     
@@ -830,6 +876,7 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
         self.silkscreen_options_label.Enable(enable_2d_options)
         self.include_component_silkscreen.Enable(enable_2d_options)
         self.include_fab_layer.Enable(enable_2d_options)
+        self.use_kicad_native_overlay.Enable(enable_2d_options)
         if using_3d:
             # Keep 3D mode visually clean and avoid accidental mixed-mode exports.
             self.include_component_silkscreen.SetValue(False)
@@ -857,6 +904,213 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
                 "kicad-cli Not Found",
                 wx.OK | wx.ICON_INFORMATION,
             )
+    
+    def _on_save_messages(self, event) -> None:
+        """Save diagnostic output messages to a file."""
+        messages = self.output_messages.GetValue()
+        if not messages.strip():
+            wx.MessageBox(
+                "No messages to save.",
+                "Nothing to Save",
+                wx.OK | wx.ICON_INFORMATION,
+            )
+            return
+        
+        dlg = wx.FileDialog(
+            self,
+            "Save diagnostic messages",
+            defaultDir=str(self.project_dir),
+            defaultFile="k2f_export_log.txt",
+            wildcard="Text files (*.txt)|*.txt|All files (*.*)|*.*",
+            style=wx.FD_SAVE | wx.FD_OVERWRITE_PROMPT,
+        )
+        if dlg.ShowModal() == wx.ID_OK:
+            try:
+                Path(dlg.GetPath()).write_text(messages, encoding="utf-8")
+                wx.MessageBox(
+                    f"Diagnostic messages saved to:\n{dlg.GetPath()}",
+                    "Save Successful",
+                    wx.OK | wx.ICON_INFORMATION,
+                )
+            except OSError as e:
+                wx.MessageBox(
+                    f"Failed to save file:\n{e}",
+                    "Save Failed",
+                    wx.OK | wx.ICON_ERROR,
+                )
+        dlg.Destroy()
+    
+    def _on_generate(self, event) -> None:
+        """Run the export process without closing the dialog."""
+        self.clear_messages()
+        self.generate_btn.Enable(False)
+        try:
+            self._run_export()
+        finally:
+            self.generate_btn.Enable(True)
+
+    def _run_export(self) -> None:
+        """Execute the full export pipeline and log diagnostics to the output panel."""
+        import datetime
+
+        self.append_message(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Starting export...")
+        wx.GetApp().Yield()
+
+        (
+            part_name,
+            out_dir,
+            text_scale,
+            pad_scale,
+            soldermask_color,
+            silkscreen_color,
+            part_family,
+            part_type,
+            use_kicad_native_overlay,
+            include_component_silkscreen,
+            include_fab_layer,
+            use_3d_render,
+            kicad_cli_path,
+        ) = self.get_values()
+
+        effective_native_overlay = bool(use_kicad_native_overlay and not use_3d_render)
+
+        self.append_message(f"  Part name:   {part_name}")
+        self.append_message(f"  Output dir:  {out_dir}")
+        self.append_message(f"  3D render (requested):             {use_3d_render}")
+        self.append_message(f"  Native silk overlay (requested):   {use_kicad_native_overlay}")
+        self.append_message(
+            f"  Native silk overlay (effective):   {effective_native_overlay}"
+        )
+        if use_3d_render and use_kicad_native_overlay:
+            self.append_message("  Mode note: native overlay disabled because 3D render is enabled.")
+        wx.GetApp().Yield()
+
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            self.append_message(f"ERROR: Could not create output directory: {exc}")
+            return
+
+        render_options = {
+            "soldermask_color": soldermask_color,
+            "silkscreen_color": silkscreen_color,
+            "pad_scale": pad_scale,
+            "silk_text_scale": text_scale,
+            "include_component_silkscreen": include_component_silkscreen,
+            "include_fab_layer": include_fab_layer,
+        }
+
+        self.append_message("  Running base export (extractor)...")
+        wx.GetApp().Yield()
+        try:
+            export_board_to_fritzing_stub(
+                self.board_path,
+                out_dir,
+                part_name=part_name,
+                render_options=render_options,
+                part_family=part_family,
+                part_type=part_type,
+            )
+            self.append_message("  Base export complete.")
+        except Exception as exc:  # noqa: BLE001
+            self.append_message(f"ERROR: Base export failed: {exc}")
+            return
+        wx.GetApp().Yield()
+
+        native_overlay_applied = False
+        if effective_native_overlay:
+            self.append_message("  Plotting KiCad SVG layers...")
+            wx.GetApp().Yield()
+            plotted = plot_kicad_svg_layers(
+                self.board,
+                out_dir / "kicad_svg_plots",
+                include_fab_layer=include_fab_layer,
+            )
+            self.append_message(f"  Plotted layers: {list(plotted.keys()) or 'none'}")
+            overlaid_path = overlay_kicad_plots_on_breadboard(
+                out_dir,
+                plotted,
+                replace_custom_silkscreen=True,
+                silkscreen_color=silkscreen_color,
+            )
+            native_overlay_applied = overlaid_path is not None
+            self.append_message(
+                f"  Native silkscreen overlay: {'applied' if native_overlay_applied else 'not applied (no matching SVG bounds?)'}"
+            )
+            wx.GetApp().Yield()
+        else:
+            self.append_message("  Native silkscreen overlay: skipped.")
+
+        write_overlay_mode_marker(
+            out_dir,
+            requested_native_overlay=use_kicad_native_overlay,
+            applied_native_overlay=native_overlay_applied,
+        )
+
+        if use_3d_render:
+            self.append_message("  Starting 3D render via kicad-cli...")
+            cli_used = kicad_cli_path or _find_kicad_cli(None) or "(auto-detect)"
+            self.append_message(f"  kicad-cli: {cli_used}")
+            wx.GetApp().Yield()
+
+            stripped = strip_silkscreen_overlays_for_3d(
+                out_dir,
+                silkscreen_color=silkscreen_color,
+            )
+            self.append_message(
+                f"  2D silkscreen overlays removed for 3D mode: {'yes' if stripped else 'no (breadboard.svg not found?)'}"
+            )
+
+            board_bounds_mm = None
+            model_json_path = out_dir / "board_model.json"
+            if model_json_path.exists():
+                model_data = json.loads(model_json_path.read_text(encoding="utf-8"))
+                board_bounds_mm = model_data.get("board_outline", {}).get("bounds_mm")
+                self.append_message(f"  Board bounds from model: {board_bounds_mm}")
+            else:
+                self.append_message("  WARNING: board_model.json not found; render may be uncropped.")
+            render_png = render_board_3d(
+                self.board_path,
+                out_dir / "kicad_svg_plots",
+                board_bounds_mm=board_bounds_mm,
+                kicad_cli_path=kicad_cli_path or None,
+                soldermask_color=soldermask_color,
+                silkscreen_color=silkscreen_color,
+            )
+            if render_png:
+                self.append_message(f"  3D render saved: {render_png}")
+                embedded = embed_3d_render_in_breadboard_svg(out_dir, render_png)
+                self.append_message(
+                    f"  Embedded into breadboard SVG: {'yes' if embedded else 'no (boardOutline not found?)'}"
+                )
+            else:
+                self.append_message("  ERROR: 3D render failed. Check kicad-cli path and board file.")
+            wx.GetApp().Yield()
+
+        self.append_message("  Rebuilding .fzpz archive...")
+        fzp_files = sorted(out_dir.glob("*.fzp"), key=lambda p: p.stat().st_mtime, reverse=True)
+        if fzp_files:
+            build_fritzing_package_zip(out_dir, part_basename=fzp_files[0].stem)
+            self.append_message(f"  Package written: {fzp_files[0].stem}.fzpz")
+        else:
+            self.append_message("  WARNING: No .fzp file found; .fzpz not rebuilt.")
+
+        self.append_message(
+            f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Export complete."
+        )
+
+    def append_message(self, message: str) -> None:
+        """Append a diagnostic message to the output panel."""
+        current = self.output_messages.GetValue()
+        if current:
+            self.output_messages.SetValue(current + "\n" + message)
+        else:
+            self.output_messages.SetValue(message)
+        self.output_messages.SetInsertionPointEnd()
+    
+    def clear_messages(self) -> None:
+        """Clear all diagnostic messages from the output panel."""
+        self.output_messages.SetValue("")
     
     def get_values(self) -> tuple[str, Path, float, float, str, str, str, str, bool, bool, bool, bool, str]:
         """Return dialog values including rendering options."""
@@ -927,89 +1181,8 @@ class PCBtoFritzingPartActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
             )
             return
         
-        dlg = PCBtoFritzingPartDialog(None, board_path)
-        if dlg.ShowModal() == wx.ID_OK:
-            (
-                part_name,
-                out_dir,
-                text_scale,
-                pad_scale,
-                soldermask_color,
-                silkscreen_color,
-                part_family,
-                part_type,
-                use_kicad_native_overlay,
-                include_component_silkscreen,
-                include_fab_layer,
-                use_3d_render,
-                kicad_cli_path,
-            ) = dlg.get_values()
-            out_dir.mkdir(parents=True, exist_ok=True)
-
-            render_options = {
-                "soldermask_color": soldermask_color,
-                "silkscreen_color": silkscreen_color,
-                "pad_scale": pad_scale,
-                "silk_text_scale": text_scale,
-                "include_component_silkscreen": include_component_silkscreen,
-                "include_fab_layer": include_fab_layer,
-            }
-            export_board_to_fritzing_stub(
-                board_path,
-                out_dir,
-                part_name=part_name,
-                render_options=render_options,
-                part_family=part_family,
-                part_type=part_type,
-            )
-
-            native_overlay_applied = False
-
-            if use_kicad_native_overlay:
-                plotted = plot_kicad_svg_layers(
-                    board,
-                    out_dir / "kicad_svg_plots",
-                    include_fab_layer=include_fab_layer,
-                )
-                overlaid_path = overlay_kicad_plots_on_breadboard(
-                    out_dir,
-                    plotted,
-                    replace_custom_silkscreen=True,
-                    silkscreen_color=silkscreen_color,
-                )
-                native_overlay_applied = overlaid_path is not None
-
-            write_overlay_mode_marker(
-                out_dir,
-                requested_native_overlay=use_kicad_native_overlay,
-                applied_native_overlay=native_overlay_applied,
-            )
-
-            if use_3d_render:
-                board_bounds_mm = None
-                model_json_path = out_dir / "board_model.json"
-                if model_json_path.exists():
-                    model_data = json.loads(model_json_path.read_text(encoding="utf-8"))
-                    board_bounds_mm = model_data.get("board_outline", {}).get("bounds_mm")
-                render_png = render_board_3d(
-                    board_path,
-                    out_dir / "kicad_svg_plots",
-                    board_bounds_mm=board_bounds_mm,
-                    kicad_cli_path=kicad_cli_path or None,
-                    soldermask_color=soldermask_color,
-                    silkscreen_color=silkscreen_color,
-                )
-                if render_png:
-                    embed_3d_render_in_breadboard_svg(out_dir, render_png)
-
-            # Rebuild the .fzpz with the fully-decorated breadboard.svg so that
-            # Fritzing loads the version that includes the native overlay and/or
-            # 3D render.  The initial fzpz is built inside export_board_to_fritzing_stub
-            # before any post-processing, so this call overwrites it with a fresh copy.
-            fzp_files = list(out_dir.glob("*.fzp"))
-            if fzp_files:
-                build_fritzing_package_zip(out_dir, part_basename=fzp_files[0].stem)
-
+        dlg = PCBtoFritzingPartDialog(None, board_path, board=board)
+        dlg.ShowModal()
         dlg.Destroy()
 
 
