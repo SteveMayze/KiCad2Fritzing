@@ -260,7 +260,7 @@ def strip_silkscreen_overlays_for_3d(
 ) -> bool:
     """Remove 2D silkscreen overlays from breadboard SVG before 3D embedding.
 
-    In photorealistic mode, silkscreen is already present in the 3D render.
+    In 3D render mode, silkscreen is already present in the 3D render.
     Keeping 2D overlays causes ghosting/double text.
     """
     breadboard_svg_path = out_dir / "breadboard.svg"
@@ -680,13 +680,13 @@ def render_board_3d(
         area_ratio = (content_w_px * content_h_px) / max(1, img_w_px * img_h_px)
         return area_ratio >= 0.995
 
-    def _run_render(source_path: Path, label: str, quality: str = "high") -> bool:
+    def _run_render(source_path: Path, label: str) -> bool:
         cmd = [
             cli, "pcb", "render",
             "--side", "top",
             "--background", "transparent",
             "--preset", "follow_pcb_editor",
-            "--quality", quality,
+            # No --quality option: defaults to basic
             "--width", str(width_px),
             "--height", str(height_px),
             "--output", str(render_path),
@@ -707,9 +707,6 @@ def render_board_3d(
             return False
 
         if result.returncode == 0 and render_path.exists():
-            if quality == "high" and _has_full_frame_haze(render_path):
-                _diag(f"  kicad-cli render ({label}) detected full-frame haze; retrying with basic quality.")
-                return _run_render(source_path, f"{label} basic-quality retry", quality="basic")
             return True
 
         stderr_summary = _summarize_output(result.stderr)
@@ -1011,10 +1008,10 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
         pad_scale_sizer.Add(self.pad_scale_input, 0)
         sizer.Add(pad_scale_sizer, 0, wx.LEFT | wx.RIGHT | wx.BOTTOM, 10)
 
-        # Photorealistic 3D render
+        # 3D render
         self.use_3d_render = wx.CheckBox(
             panel,
-            label="Photorealistic 3D render (requires kicad-cli)",
+            label="3D render (requires kicad-cli)",
         )
         self.use_3d_render.SetValue(True)
         self.use_3d_render.Bind(wx.EVT_CHECKBOX, self._on_3d_render_toggle)

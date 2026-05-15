@@ -41,7 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--render-3d",
         action="store_true",
-        help="Embed a photorealistic top-down 3D render into the breadboard SVG (requires kicad-cli)",
+        help="Embed a 3D render into the breadboard SVG (requires kicad-cli)",
     )
     parser.add_argument(
         "--kicad-cli-path",

@@ -35,12 +35,13 @@
 - Fixed board projection orientation so generated geometry is not vertically mirrored.
 - Cropped generated SVG canvas to board bounds to remove excessive gray padding in Fritzing.
 - Filtered non-user-facing silkscreen content (component reference/value and component footprint silk).
+- 3D render mode now uses KiCad's basic viewer output.
 
 ### Plugin UX and Metadata
 
 - Fixed KiCad plugin loader syntax and improved PCM install documentation.
 - Added plugin output-directory UX improvements (create-directory browse, project-relative defaults, OS separator suffix behavior).
-- Added render-option controls for soldermask/silkscreen color and pad scaling in plugin dialog.
+- Added render-option controls for soldermask/silkscreen color and pad scaling in plugin dialog; these are now part of the completed 3D render workflow.
 - Added Fritzing metadata safeguards: generated `.fzp` now includes non-empty `family` and `type` properties.
 - Added plugin dialog controls for user-defined Part Family and Part Type with defaults.
 
@@ -54,6 +55,7 @@
 ## Current Focus
 
 - Keep stabilizing cross-tool compatibility (KiCad export -> Fritzing import) with guardrail tests and small iterative UX fixes.
+- 3D render investigation is complete.
 
 ## Status Board (Reconciled 2026-05-14)
 
@@ -61,7 +63,7 @@
 | --- | --- | --- |
 | Core parser + connector + artifact generation baseline | Done | Covered by existing Completed history and passing baseline tests. |
 | KiCad-native SVG plotting investigation and plugin overlay path | Done | Investigation completed and integration path implemented in plugin flow. |
-| Plugin UX improvements (output dir handling, metadata, render controls, diagnostics) | Done | Primary UX improvements delivered; final polish remains tied to revised Balsamiq draft. |
+| Plugin UX improvements (output dir handling, metadata, render controls, diagnostics) | Done | Primary UX improvements delivered; render follow-up work is complete. |
 | Cross-tool compatibility hardening on real boards | In Progress | Active focus for iterative fixes and guardrail test expansion. |
 | SWIG -> IPC migration planning and execution | Open | Planned; no full adapter/execution migration merged yet. |
 | CI on push/PR | Open | No GitHub Actions workflow currently present. |
@@ -124,7 +126,7 @@ Status: Completed.
 
 - Plugin path can generate part output using KiCad-plotted `F_SilkS` and `Edge_Cuts` overlays.
 - Native overlay integration is implemented for non-3D flow and can be used for 2D-render-first output.
-- Current default behavior prefers photorealistic 3D render mode.
+- Current default behavior prefers 3D render mode.
 - In 3D mode, advanced 2D overlay controls are disabled by default to avoid mixed-mode/ghosted output.
 - Parser-based SVG generation remains available as the non-KiCad-runtime fallback path (CLI/tests).
 
