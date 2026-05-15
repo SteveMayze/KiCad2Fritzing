@@ -52,6 +52,8 @@ HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 DEFAULT_RENDER_OPTIONS = {
     "soldermask_color": "#2b5f82",
     "silkscreen_color": "#f5f5f5",
+    "annular_color": "#ffb300",
+    "hole_color": "#d84315",
     "pad_scale": 0.75,
     "silk_text_scale": 1.15,
     "include_component_silkscreen": False,
@@ -97,6 +99,14 @@ def _resolve_render_options(render_options: dict | None) -> dict:
     options["silkscreen_color"] = _sanitize_color(
         options.get("silkscreen_color"),
         DEFAULT_RENDER_OPTIONS["silkscreen_color"],
+    )
+    options["annular_color"] = _sanitize_color(
+        options.get("annular_color"),
+        DEFAULT_RENDER_OPTIONS["annular_color"],
+    )
+    options["hole_color"] = _sanitize_color(
+        options.get("hole_color"),
+        DEFAULT_RENDER_OPTIONS["hole_color"],
     )
     options["pad_scale"] = _sanitize_float(
         options.get("pad_scale"),
@@ -1326,11 +1336,14 @@ def _svg_for_view(
         outline_points = " ".join(f"{x},{y}" for x, y in outline)
         pad_radius = _scaled_pad_radius(scale, pad_scale=float(options["pad_scale"]))
         pad_stroke = round(max(0.7, pad_radius * 0.34), 3)
+        # In SVG, fill paints the inner disk and stroke paints the outer ring.
+        pad_inner_fill = str(options["hole_color"])
+        pad_outer_stroke = str(options["annular_color"])
         pins = []
         for i, (x, y) in enumerate(projected):
             pins.append(
                 f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="{pad_radius}" '
-                f'fill="#ffb300" stroke="#d84315" stroke-width="{pad_stroke}"/>'
+                f'fill="{pad_inner_fill}" stroke="{pad_outer_stroke}" stroke-width="{pad_stroke}"/>'
             )
         silkscreen_svg = _render_svg_silkscreen(
             board_model,
@@ -1415,12 +1428,14 @@ def _svg_for_view(
         pad_scale=float(options["pad_scale"]),
     )
     pad_stroke = round(max(0.8, pad_radius * 0.5), 3)
+    # PCB view uses ring-only connector markers.
+    pad_ring_stroke = str(options["annular_color"])
     top_pins = []
     bottom_pins = []
     for i, (x, y) in enumerate(projected):
         pin_svg = (
             f'<circle id="connector{i}pin" cx="{x}" cy="{y}" r="{pad_radius}" fill="none" '
-            f'stroke="#ff9800" stroke-width="{pad_stroke}"/>'
+            f'stroke="{pad_ring_stroke}" stroke-width="{pad_stroke}"/>'
         )
         top_pins.append(pin_svg)
         bottom_pins.append(pin_svg)

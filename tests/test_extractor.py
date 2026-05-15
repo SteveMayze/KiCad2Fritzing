@@ -660,6 +660,8 @@ def test_write_placeholder_svg_views_applies_render_options(tmp_path: Path) -> N
         render_options={
             "soldermask_color": "#123456",
             "silkscreen_color": "#ddeeff",
+            "annular_color": "#00aa55",
+            "hole_color": "#2244cc",
             "pad_scale": 0.5,
             "silk_text_scale": 1.2,
         },
@@ -671,7 +673,9 @@ def test_write_placeholder_svg_views_applies_render_options(tmp_path: Path) -> N
     assert 'fill="#123456"' in breadboard
     assert 'fill="#123456"' in pcb
     assert 'fill="#ddeeff"' in breadboard
-    assert 'r="1.9" fill="#ffb300"' in breadboard
+    assert 'r="1.9" fill="#2244cc"' in breadboard
+    assert 'stroke="#00aa55"' in breadboard
+    assert 'stroke="#00aa55"' in pcb
 
 
 def test_validate_generated_artifacts_success(tmp_path: Path) -> None:

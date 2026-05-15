@@ -241,6 +241,12 @@ def _remove_custom_silkscreen_elements(svg_root: ET.Element, silkscreen_color: s
     color_lower = silkscreen_color.lower()
 
     def should_remove(elem: ET.Element) -> bool:
+        elem_id = elem.attrib.get("id", "")
+        # Never strip connector pin geometry or board outline during
+        # silkscreen cleanup; these are required for interactivity and
+        # for clipping/alignment in 3D embed mode.
+        if elem_id.startswith("connector") or elem_id == "boardOutline":
+            return False
         stroke = elem.attrib.get("stroke", "").lower()
         fill = elem.attrib.get("fill", "").lower()
         return stroke == color_lower or fill == color_lower
@@ -994,10 +1000,18 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
         self.soldermask_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#2b5f82"))
         self.silkscreen_color_label = wx.StaticText(panel, label="Silkscreen color:")
         self.silkscreen_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#f5f5f5"))
+        annular_label = wx.StaticText(panel, label="Annular color:")
+        self.annular_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#ffb300"))
+        hole_label = wx.StaticText(panel, label="Hole color:")
+        self.hole_color_input = wx.ColourPickerCtrl(panel, colour=wx.Colour("#d84315"))
         color_sizer.Add(soldermask_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
         color_sizer.Add(self.soldermask_color_input, 0, wx.RIGHT, 22)
         color_sizer.Add(self.silkscreen_color_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
-        color_sizer.Add(self.silkscreen_color_input, 0)
+        color_sizer.Add(self.silkscreen_color_input, 0, wx.RIGHT, 22)
+        color_sizer.Add(annular_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        color_sizer.Add(self.annular_color_input, 0, wx.RIGHT, 22)
+        color_sizer.Add(hole_label, 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 8)
+        color_sizer.Add(self.hole_color_input, 0)
         sizer.Add(color_sizer, 0, wx.ALL, 10)
 
         # Pad/Pin scaling (moved up to after color pickers)
@@ -1271,6 +1285,11 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
         self.generate_btn.Enable(False)
         try:
             self._run_export()
+        except Exception as exc:  # noqa: BLE001
+            import traceback
+
+            self.append_message(f"ERROR: Unexpected export failure: {exc}")
+            self.append_message(traceback.format_exc())
         finally:
             self.generate_btn.Enable(True)
 
@@ -1288,6 +1307,8 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
             pad_scale,
             soldermask_color,
             silkscreen_color,
+            annular_color,
+            hole_color,
             part_family,
             part_type,
             use_kicad_native_overlay,
@@ -1319,6 +1340,8 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
         render_options = {
             "soldermask_color": soldermask_color,
             "silkscreen_color": silkscreen_color,
+            "annular_color": annular_color,
+            "hole_color": hole_color,
             "pad_scale": pad_scale,
             "silk_text_scale": text_scale,
             "include_component_silkscreen": include_component_silkscreen,
@@ -1327,6 +1350,7 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
 
         self.append_message("  Running base export (extractor)...")
         wx.GetApp().Yield()
+        import traceback
         try:
             export_board_to_fritzing_stub(
                 self.board_path,
@@ -1337,8 +1361,9 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
                 part_type=part_type,
             )
             self.append_message("  Base export complete.")
-        except Exception as exc:  # noqa: BLE001
-            self.append_message(f"ERROR: Base export failed: {exc}")
+        except Exception as exc:
+            tb = traceback.format_exc()
+            self.append_message(f"ERROR: Base export failed: {exc}\n{tb}")
             return
         wx.GetApp().Yield()
 
@@ -1442,7 +1467,7 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
         """Clear all diagnostic messages from the output panel."""
         self.output_messages.SetValue("")
     
-    def get_values(self) -> tuple[str, Path, float, float, str, str, str, str, bool, bool, bool, bool, str]:
+    def get_values(self) -> tuple[str, Path, float, float, str, str, str, str, str, str, bool, bool, bool, bool, str]:
         """Return dialog values including rendering options."""
         part_name = self.part_name_input.GetValue()
         part_family = self.part_family_input.GetValue().strip() or "KiCad2Fritzing Generated"
@@ -1463,6 +1488,8 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
 
         soldermask_color = _normalize_hex_color(self.soldermask_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#2b5f82")
         silkscreen_color = _normalize_hex_color(self.silkscreen_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#f5f5f5")
+        annular_color = _normalize_hex_color(self.annular_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#ffb300")
+        hole_color = _normalize_hex_color(self.hole_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#d84315")
 
         use_kicad_native_overlay = bool(self.use_kicad_native_overlay.GetValue())
         include_component_silkscreen = bool(self.include_component_silkscreen.GetValue())
@@ -1476,6 +1503,8 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
             pad_scale,
             soldermask_color,
             silkscreen_color,
+            annular_color,
+            hole_color,
             part_family,
             part_type,
             use_kicad_native_overlay,
