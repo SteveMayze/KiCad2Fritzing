@@ -685,7 +685,7 @@ def render_board_3d(
             cli, "pcb", "render",
             "--side", "top",
             "--background", "transparent",
-            "--preset", "follow_pcb_editor",
+            "--preset", "follow_plot_settings",
             # No --quality option: defaults to basic
             "--width", str(width_px),
             "--height", str(height_px),
