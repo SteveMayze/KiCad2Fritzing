@@ -12,6 +12,15 @@ From the repository root:
 python3 scripts/build_kicad10_dist.py
 ```
 
+For publication/release builds (strict icon checks enabled):
+
+```
+python3 scripts/build_kicad10_dist.py --release
+```
+
+If `--release` reports missing icon assets, see icon requirements in
+`docs/KICAD_PLUGIN_ICON_SPEC.md` and add the required files before rebuilding.
+
 Artifacts produced:
 
 | Path | Purpose |

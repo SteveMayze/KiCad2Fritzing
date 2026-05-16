@@ -23,6 +23,7 @@ your real GitHub username / contact details, then re-run this script.
 
 from __future__ import annotations
 
+import argparse
 import json
 import shutil
 from pathlib import Path
@@ -152,11 +153,50 @@ def _copy_package(src: Path, dst: Path) -> None:
     shutil.copytree(src, dst, ignore=_ignore)
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Build a KiCad PCM-compatible addon zip for KiCad2Fritzing.",
+    )
+    parser.add_argument(
+        "--release",
+        action="store_true",
+        help="Fail if required icon assets are missing.",
+    )
+    return parser.parse_args()
+
+
+def _validate_release_assets(
+    toolbar_light_icon: Path,
+    toolbar_dark_icon: Path,
+    pcm_icon: Path,
+) -> None:
+    missing: list[Path] = []
+    for icon_path in (toolbar_light_icon, toolbar_dark_icon, pcm_icon):
+        if not icon_path.exists():
+            missing.append(icon_path)
+
+    if not missing:
+        return
+
+    print("\n✗ Release build blocked: required icon assets are missing:")
+    for icon_path in missing:
+        print(f"  - {icon_path}")
+    raise SystemExit(2)
+
+
 def main() -> int:
+    args = _parse_args()
     repo_root = Path(__file__).resolve().parents[1]
     src_pkg = repo_root / "src" / "pcb2fritzing"
+    assets_dir = src_pkg / "kicad" / "assets" / "icons"
+    src_toolbar_light_icon = assets_dir / "toolbar" / "icon_light.png"
+    src_toolbar_dark_icon = assets_dir / "toolbar" / "icon_dark.png"
+    src_pcm_icon = assets_dir / "pcm" / "icon.png"
     dist_root = repo_root / "dist"
     archive_root = dist_root / "pcb2fritzing-pcm"
+
+    if args.release:
+        _validate_release_assets(src_toolbar_light_icon, src_toolbar_dark_icon, src_pcm_icon)
 
     # ---- (re)build the exploded archive directory --------------------------
     if archive_root.exists():
@@ -177,8 +217,14 @@ def main() -> int:
     (plugins_dir / "pcb2fritzing_action.py").write_text(_PLUGIN_ENTRY, encoding="utf-8")
     _copy_package(src_pkg, plugins_dir / "pcb2fritzing")
 
-    # resources/ – placeholder; drop a 64×64 icon.png here to show in PCM
-    (archive_root / "resources").mkdir()
+    # resources/ – optional PCM catalog icon (64x64 recommended)
+    resources_dir = archive_root / "resources"
+    resources_dir.mkdir()
+    if src_pcm_icon.exists():
+        shutil.copy2(src_pcm_icon, resources_dir / "icon.png")
+    else:
+        print(f"ℹ  PCM icon not found at {src_pcm_icon}")
+        print("   Add icon.png there to include a package icon in Plugin and Content Manager.")
 
     # ---- zip ---------------------------------------------------------------
     zip_path = dist_root / "PCB2FritzingPart-pcm.zip"

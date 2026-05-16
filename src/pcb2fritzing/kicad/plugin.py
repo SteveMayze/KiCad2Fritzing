@@ -37,6 +37,14 @@ NUMERIC_PREFIX_RE = re.compile(r"[-+]?\d*\.?\d+(?:[eE][-+]?\d+)?")
 HEX_COLOR_RE = re.compile(r"^#[0-9A-Fa-f]{6}$")
 
 
+def _plugin_icon_path(filename: str) -> str | None:
+    """Return absolute icon path if it exists, else None."""
+    icon_path = Path(__file__).resolve().parent / "assets" / "icons" / "toolbar" / filename
+    if icon_path.exists():
+        return str(icon_path)
+    return None
+
+
 def _parse_svg_number(value: str | None) -> float | None:
     if not value:
         return None
@@ -1523,6 +1531,14 @@ class PCBtoFritzingPartActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
         self.category = "Export"
         self.description = "Export current KiCad PCB into Fritzing starter assets"
         self.show_toolbar_button = True
+
+        # Keep toolbar button visible even if custom icons are not installed yet.
+        light_icon = _plugin_icon_path("icon_light.png")
+        dark_icon = _plugin_icon_path("icon_dark.png")
+        if light_icon:
+            self.icon_file_name = light_icon
+        if dark_icon:
+            self.dark_icon_file_name = dark_icon
 
     def Run(self) -> None:  # noqa: N802 - KiCad API uses Run
         board = pcbnew.GetBoard()
