@@ -21,6 +21,19 @@ Outputs:
 Before distributing publicly, copy scripts/build_config.json.example to
 scripts/build_config.json and update its release/contact fields, then re-run
 this script.
+
+VERSION FORMAT
+KiCad PCM requires versions to match: ^\d{1,4}(\.\d{1,4}(\.\d{1,6})?)?$
+Valid examples:
+  - "0" (single component)
+  - "1.2" (major.minor)
+  - "0.1.0" (major.minor.patch)
+  - "1000.9999.999999" (maximum bounds)
+
+Invalid examples (rejected):
+  - "0.1.0-beta" (pre-release suffix not allowed)
+  - "1.0.0-rc1" (release candidate not allowed)
+  - "v1.0.0" (leading 'v' not allowed)
 """
 
 from __future__ import annotations
@@ -28,6 +41,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 from pathlib import Path
 
@@ -267,8 +281,38 @@ def _validate_release_assets(
     raise SystemExit(2)
 
 
+def _validate_version(version: str) -> None:
+    """Validate version matches KiCad PCM schema regex.
+    
+    KiCad PCM requires: ^\d{1,4}(\.\d{1,4}(\.\d{1,6})?)?$
+    
+    Valid: "0", "1.2", "0.1.0", "1000.9999.999999"
+    Invalid: "0.1.0-beta", "1.0.0-rc1", "v1.0.0"
+    """
+    pattern = r"^\d{1,4}(\.\d{1,4}(\.\d{1,6})?)?$"
+    if not re.match(pattern, version):
+        print(f"\n✗ Invalid version format: '{version}'")
+        print(f"  Must match KiCad PCM schema: {pattern}")
+        print()
+        print("  Valid examples:")
+        print('    "0"')
+        print('    "1.2"')
+        print('    "0.1.0"')
+        print('    "1000.9999.999999"')
+        print()
+        print("  Invalid examples (rejected):")
+        print('    "0.1.0-beta" (pre-release suffix)')
+        print('    "1.0.0-rc1" (release candidate)')
+        print('    "v1.0.0" (leading v)')
+        raise SystemExit(1)
+
+
 def main() -> int:
     args = _parse_args()
+    
+    # Validate version format first, before any build operations
+    _validate_version(_VERSION)
+    
     repo_root = Path(__file__).resolve().parents[1]
     src_pkg = repo_root / "src" / "pcb2fritzing"
     assets_dir = src_pkg / "kicad" / "assets" / "icons"

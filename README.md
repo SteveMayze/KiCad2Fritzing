@@ -109,6 +109,50 @@ Generated artifacts:
 - `dist/pcb2fritzing-pcm/`
 - `dist/PCB2FritzingPart-pcm.zip`
 
+### Build Configuration
+
+Before building a release, copy `scripts/build_config.json.example` to `scripts/build_config.json` and update with your details:
+
+```bash
+cp scripts/build_config.json.example scripts/build_config.json
+# Edit scripts/build_config.json with your username, author name, version, etc.
+```
+
+**Important:** Configurable fields in `build_config.json`:
+- `username`: GitHub username (used in plugin identifier and URLs)
+- `author_name`: Your full name (displayed in KiCad plugin metadata)
+- `contact_web`: Your contact URL (e.g., GitHub project page)
+- `version`: **Must match KiCad PCM version format** (see below)
+- `release_status`: Plugin status (`"development"` or `"stable"`)
+- `kicad_version`: Minimum KiCad version (e.g., `"10.0"`)
+- `runtime`: Runtime requirement (typically `"swig"`)
+- `release_tag`: Git tag for this release (e.g., `"v0.1.0"`)
+- `download_url`: GitHub release URL (auto-generated if not set)
+- `tags`: Plugin category tags
+- `platforms`: Supported platforms (`["linux", "macos", "windows"]`)
+
+Fields **NOT** required (auto-computed from artifacts):
+- `download_sha256` — Computed from ZIP file
+- `download_size` — Computed from ZIP file
+- `install_size` — Computed from exploded package
+
+### Version Format
+
+KiCad PCM requires versions to match the schema: `^\d{1,4}(\.\d{1,4}(\.\d{1,6})?)?$`
+
+**Valid version examples:**
+- `"0"` – Single component
+- `"1.2"` – Major.minor
+- `"0.1.0"` – Major.minor.patch (recommended)
+- `"1000.9999.999999"` – Maximum bounds
+
+**Invalid version examples (will be rejected):**
+- `"0.1.0-beta"` – Pre-release suffix not allowed
+- `"1.0.0-rc1"` – Release candidate not allowed
+- `"v1.0.0"` – Leading `v` not allowed
+
+The build script validates version format on every build and will fail with a helpful error if the format is incorrect.
+
 Install path on macOS for KiCad 10 Action Plugins:
 - `~/Library/Application Support/kicad/10.0/scripting/plugins`
 
