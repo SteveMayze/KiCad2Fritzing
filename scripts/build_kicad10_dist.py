@@ -101,9 +101,9 @@ def _build_metadata_base() -> dict:
         "description": "Export KiCad PCB layouts to Fritzing part assets.",
         "description_full": (
             "PCB to Fritzing Part is an action plugin for the KiCad PCB editor that "
-            "extracts board layout information — footprints, pads, nets, and board "
-            "outline — and generates Fritzing-compatible part files (.fzp) and SVG "
-            "views ready for use in Fritzing."
+            "extracts board layout information — footprints, pads, outline — and "
+            "generates Fritzing-compatible part files (.fzp) and SVG views ready for "
+            "use in Fritzing."
         ),
         "identifier": f"com.github.{_USERNAME}.pcb2fritzing",
         "type": "plugin",
