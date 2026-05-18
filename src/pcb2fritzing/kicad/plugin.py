@@ -23,13 +23,14 @@ from xml.etree import ElementTree as ET
 from pathlib import Path
 
 from pcb2fritzing.core.extractor import build_fritzing_package_zip, export_board_to_fritzing_stub
-
-try:
-    import pcbnew  # type: ignore
-    import wx  # type: ignore
-except ImportError:  # pragma: no cover
-    pcbnew = None
-    wx = None
+from pcb2fritzing.kicad.export_service import ExportHooks, ExportRequest, run_export_pipeline
+from pcb2fritzing.kicad.runtime_adapter import (
+    PCBNEW as pcbnew,
+    WX as wx,
+    diagnose_runtime,
+    resolve_runtime_context,
+    supports_native_plot_overlay,
+)
 
 
 SVG_NS = "http://www.w3.org/2000/svg"
@@ -376,53 +377,147 @@ def overlay_kicad_plots_on_breadboard(
 
 
 def plot_kicad_svg_layers(
-    board, out_dir: Path, include_fab_layer: bool = False
+    board,
+    out_dir: Path,
+    include_fab_layer: bool = False,
+    board_file: Path | None = None,
+    kicad_cli_path: str | None = None,
+    diagnostics: list[str] | None = None,
 ) -> dict[str, Path]:
     """Plot KiCad-native SVG layers for comparison and future integration.
 
     This spike helper exports KiCad's own SVG for selected layers so we can
     evaluate fidelity against the custom renderer.
     """
-    if pcbnew is None:
+    if supports_native_plot_overlay(board):
+        out_dir.mkdir(parents=True, exist_ok=True)
+        plot_ctrl = pcbnew.PLOT_CONTROLLER(board)
+        plot_opts = plot_ctrl.GetPlotOptions()
+
+        plot_opts.SetOutputDirectory(str(out_dir))
+        plot_opts.SetPlotFrameRef(False)
+        plot_opts.SetMirror(False)
+        plot_opts.SetNegative(False)
+        plot_opts.SetUseAuxOrigin(False)
+        plot_opts.SetFormat(pcbnew.PLOT_FORMAT_SVG)
+
+        if hasattr(plot_opts, "SetSvgPrecision"):
+            # KiCad Python API signature varies by version.
+            # Some builds accept (precision, useInch), others only (precision).
+            try:
+                plot_opts.SetSvgPrecision(4, False)
+            except TypeError:
+                plot_opts.SetSvgPrecision(4)
+        if hasattr(plot_opts, "SetTextMode") and hasattr(pcbnew, "PLOT_TEXT_MODE_DEFAULT"):
+            plot_opts.SetTextMode(pcbnew.PLOT_TEXT_MODE_DEFAULT)
+
+        plotted: dict[str, Path] = {}
+        target_layers = [
+            ("f_silks", pcbnew.F_SilkS, "Front Silkscreen"),
+            ("edge_cuts", pcbnew.Edge_Cuts, "Board Outline"),
+        ]
+        if include_fab_layer:
+            target_layers.append(("f_fab", pcbnew.F_Fab, "Front Fabrication"))
+
+        for key, layer_id, description in target_layers:
+            plot_ctrl.SetLayer(layer_id)
+            if not plot_ctrl.OpenPlotfile(key, pcbnew.PLOT_FORMAT_SVG, description):
+                continue
+            if plot_ctrl.PlotLayer():
+                plotted[key] = Path(str(plot_ctrl.GetPlotFileName()))
+
+        plot_ctrl.ClosePlot()
+        return plotted
+
+    return _plot_kicad_svg_layers_cli(
+        board_file=board_file,
+        out_dir=out_dir,
+        include_fab_layer=include_fab_layer,
+        kicad_cli_path=kicad_cli_path,
+        diagnostics=diagnostics,
+    )
+
+
+def _plot_kicad_svg_layers_cli(
+    board_file: Path | None,
+    out_dir: Path,
+    include_fab_layer: bool,
+    kicad_cli_path: str | None,
+    diagnostics: list[str] | None,
+) -> dict[str, Path]:
+    """Plot KiCad SVG layers using kicad-cli (IPC-safe fallback backend)."""
+    if board_file is None:
+        if diagnostics is not None:
+            diagnostics.append("  Native overlay plot skipped: board file path unavailable.")
+        return {}
+
+    cli = _find_kicad_cli(kicad_cli_path)
+    if cli is None:
+        if diagnostics is not None:
+            diagnostics.append("  Native overlay plot skipped: kicad-cli not found.")
         return {}
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    plot_ctrl = pcbnew.PLOT_CONTROLLER(board)
-    plot_opts = plot_ctrl.GetPlotOptions()
+    board_file = board_file.resolve()
 
-    plot_opts.SetOutputDirectory(str(out_dir))
-    plot_opts.SetPlotFrameRef(False)
-    plot_opts.SetMirror(False)
-    plot_opts.SetNegative(False)
-    plot_opts.SetUseAuxOrigin(False)
-    plot_opts.SetFormat(pcbnew.PLOT_FORMAT_SVG)
-
-    if hasattr(plot_opts, "SetSvgPrecision"):
-        # KiCad Python API signature varies by version.
-        # Some builds accept (precision, useInch), others only (precision).
-        try:
-            plot_opts.SetSvgPrecision(4, False)
-        except TypeError:
-            plot_opts.SetSvgPrecision(4)
-    if hasattr(plot_opts, "SetTextMode") and hasattr(pcbnew, "PLOT_TEXT_MODE_DEFAULT"):
-        plot_opts.SetTextMode(pcbnew.PLOT_TEXT_MODE_DEFAULT)
-
-    plotted: dict[str, Path] = {}
-    target_layers = [
-        ("f_silks", pcbnew.F_SilkS, "Front Silkscreen"),
-        ("edge_cuts", pcbnew.Edge_Cuts, "Board Outline"),
+    layer_specs: list[tuple[str, str]] = [
+        ("f_silks", "F.SilkS"),
+        ("edge_cuts", "Edge.Cuts"),
     ]
     if include_fab_layer:
-        target_layers.append(("f_fab", pcbnew.F_Fab, "Front Fabrication"))
+        layer_specs.append(("f_fab", "F.Fab"))
 
-    for key, layer_id, description in target_layers:
-        plot_ctrl.SetLayer(layer_id)
-        if not plot_ctrl.OpenPlotfile(key, pcbnew.PLOT_FORMAT_SVG, description):
+    plotted: dict[str, Path] = {}
+    for key, layer_name in layer_specs:
+        out_file = (out_dir / f"{key}.svg").resolve()
+        cmd = [
+            cli,
+            "pcb",
+            "export",
+            "svg",
+            "--mode-single",
+            "--layers",
+            layer_name,
+            "--output",
+            str(out_file),
+            str(board_file),
+        ]
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                timeout=120,
+                cwd=str(board_file.parent),
+            )
+        except subprocess.TimeoutExpired:
+            if diagnostics is not None:
+                diagnostics.append(f"  kicad-cli plot ({layer_name}) timed out after 120s.")
             continue
-        if plot_ctrl.PlotLayer():
-            plotted[key] = Path(str(plot_ctrl.GetPlotFileName()))
+        except Exception as exc:  # noqa: BLE001
+            if diagnostics is not None:
+                diagnostics.append(f"  kicad-cli plot ({layer_name}) failed to execute: {exc}")
+            continue
 
-    plot_ctrl.ClosePlot()
+        if result.returncode == 0 and out_file.exists():
+            plotted[key] = out_file
+            continue
+
+        stderr_summary = _summarize_output(result.stderr)
+        stdout_summary = _summarize_output(result.stdout)
+        if diagnostics is not None:
+            diagnostics.append(
+                f"  kicad-cli plot ({layer_name}) failed (exit {result.returncode})."
+            )
+            if stderr_summary:
+                diagnostics.append(f"    stderr: {stderr_summary}")
+            elif stdout_summary:
+                diagnostics.append(f"    stdout: {stdout_summary}")
+
+    if diagnostics is not None and plotted:
+        diagnostics.append(
+            f"  Native overlay plotted via kicad-cli: {', '.join(sorted(plotted.keys()))}"
+        )
+
     return plotted
 
 
@@ -611,6 +706,23 @@ def _find_kicad_cli(override: str | None) -> str | None:
         if Path(c).is_file():
             return c
     return shutil.which("kicad-cli")
+
+
+def _summarize_output(text: bytes | str | None) -> str:
+    if text is None:
+        return ""
+    if isinstance(text, bytes):
+        try:
+            value = text.decode("utf-8", errors="replace")
+        except Exception:  # noqa: BLE001
+            value = str(text)
+    else:
+        value = text
+    value = value.strip()
+    if not value:
+        return ""
+    lines = value.splitlines()
+    return " | ".join(lines[-3:])
 
 
 def render_board_3d(
@@ -1286,224 +1398,47 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
                     wx.OK | wx.ICON_ERROR,
                 )
         dlg.Destroy()
-    
-    def _on_generate(self, event) -> None:
-        """Run the export process without closing the dialog."""
-        self.clear_messages()
-        self.generate_btn.Enable(False)
-        try:
-            self._run_export()
-        except Exception as exc:  # noqa: BLE001
-            import traceback
 
-            self.append_message(f"ERROR: Unexpected export failure: {exc}")
-            self.append_message(traceback.format_exc())
-        finally:
-            self.generate_btn.Enable(True)
-
-    def _run_export(self) -> None:
-        """Execute the full export pipeline and log diagnostics to the output panel."""
-        import datetime
-
-        self.append_message(f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Starting export...")
-        wx.GetApp().Yield()
-
-        (
-            part_name,
-            out_dir,
-            text_scale,
-            pad_scale,
-            soldermask_color,
-            silkscreen_color,
-            annular_color,
-            hole_color,
-            part_family,
-            part_type,
-            use_kicad_native_overlay,
-            include_component_silkscreen,
-            include_fab_layer,
-            use_3d_render,
-            kicad_cli_path,
-        ) = self.get_values()
-
-        effective_native_overlay = bool(use_kicad_native_overlay and not use_3d_render)
-
-        self.append_message(f"  Part name:   {part_name}")
-        self.append_message(f"  Output dir:  {out_dir}")
-        self.append_message(f"  3D render (requested):             {use_3d_render}")
-        self.append_message(f"  Native silk overlay (requested):   {use_kicad_native_overlay}")
-        self.append_message(
-            f"  Native silk overlay (effective):   {effective_native_overlay}"
-        )
-        if use_3d_render and use_kicad_native_overlay:
-            self.append_message("  Mode note: native overlay disabled because 3D render is enabled.")
-        wx.GetApp().Yield()
-
-        try:
-            out_dir.mkdir(parents=True, exist_ok=True)
-        except OSError as exc:
-            self.append_message(f"ERROR: Could not create output directory: {exc}")
-            return
-
-        render_options = {
-            "soldermask_color": soldermask_color,
-            "silkscreen_color": silkscreen_color,
-            "annular_color": annular_color,
-            "hole_color": hole_color,
-            "pad_scale": pad_scale,
-            "silk_text_scale": text_scale,
-            "include_component_silkscreen": include_component_silkscreen,
-            "include_fab_layer": include_fab_layer,
-        }
-
-        self.append_message("  Running base export (extractor)...")
-        wx.GetApp().Yield()
-        import traceback
-        try:
-            export_board_to_fritzing_stub(
-                self.board_path,
-                out_dir,
-                part_name=part_name,
-                render_options=render_options,
-                part_family=part_family,
-                part_type=part_type,
-            )
-            self.append_message("  Base export complete.")
-        except Exception as exc:
-            tb = traceback.format_exc()
-            self.append_message(f"ERROR: Base export failed: {exc}\n{tb}")
-            return
-        wx.GetApp().Yield()
-
-        native_overlay_applied = False
-        if effective_native_overlay:
-            self.append_message("  Plotting KiCad SVG layers...")
-            wx.GetApp().Yield()
-            plotted = plot_kicad_svg_layers(
-                self.board,
-                out_dir / "kicad_svg_plots",
-                include_fab_layer=include_fab_layer,
-            )
-            self.append_message(f"  Plotted layers: {list(plotted.keys()) or 'none'}")
-            overlaid_path = overlay_kicad_plots_on_breadboard(
-                out_dir,
-                plotted,
-                replace_custom_silkscreen=True,
-                silkscreen_color=silkscreen_color,
-            )
-            native_overlay_applied = overlaid_path is not None
-            self.append_message(
-                f"  Native silkscreen overlay: {'applied' if native_overlay_applied else 'not applied (no matching SVG bounds?)'}"
-            )
-            wx.GetApp().Yield()
-        else:
-            self.append_message("  Native silkscreen overlay: skipped.")
-
-        write_overlay_mode_marker(
-            out_dir,
-            requested_native_overlay=use_kicad_native_overlay,
-            applied_native_overlay=native_overlay_applied,
-        )
-
-        if use_3d_render:
-            self.append_message("  Starting 3D render via kicad-cli...")
-            cli_used = kicad_cli_path or _find_kicad_cli(None) or "(auto-detect)"
-            self.append_message(f"  kicad-cli: {cli_used}")
-            wx.GetApp().Yield()
-
-            stripped = strip_silkscreen_overlays_for_3d(
-                out_dir,
-                silkscreen_color=silkscreen_color,
-            )
-            self.append_message(
-                f"  2D silkscreen overlays removed for 3D mode: {'yes' if stripped else 'no (breadboard.svg not found?)'}"
-            )
-
-            board_bounds_mm = None
-            model_json_path = out_dir / "board_model.json"
-            if model_json_path.exists():
-                model_data = json.loads(model_json_path.read_text(encoding="utf-8"))
-                board_bounds_mm = model_data.get("board_outline", {}).get("bounds_mm")
-                self.append_message(f"  Board bounds from model: {board_bounds_mm}")
-            else:
-                self.append_message("  WARNING: board_model.json not found; render may be uncropped.")
-
-            render_diagnostics: list[str] = []
-            render_png = render_board_3d(
-                self.board_path,
-                out_dir / "kicad_svg_plots",
-                board_bounds_mm=board_bounds_mm,
-                kicad_cli_path=kicad_cli_path or None,
-                soldermask_color=soldermask_color,
-                silkscreen_color=silkscreen_color,
-                diagnostics=render_diagnostics,
-            )
-            for line in render_diagnostics:
-                self.append_message(line)
-            if render_png:
-                self.append_message(f"  3D render saved: {render_png}")
-                embedded = embed_3d_render_in_breadboard_svg(out_dir, render_png)
-                self.append_message(
-                    f"  Embedded into breadboard SVG: {'yes' if embedded else 'no (boardOutline not found?)'}"
-                )
-            else:
-                self.append_message("  ERROR: 3D render failed. Check kicad-cli path and board file.")
-            wx.GetApp().Yield()
-
-        self.append_message("  Rebuilding .fzpz archive...")
-        fzp_files = sorted(out_dir.glob("*.fzp"), key=lambda p: p.stat().st_mtime, reverse=True)
-        if fzp_files:
-            build_fritzing_package_zip(out_dir, part_basename=fzp_files[0].stem)
-            self.append_message(f"  Package written: {fzp_files[0].stem}.fzpz")
-        else:
-            self.append_message("  WARNING: No .fzp file found; .fzpz not rebuilt.")
-
-        self.append_message(
-            f"[{datetime.datetime.now().strftime('%H:%M:%S')}] Export complete."
-        )
+    def clear_messages(self) -> None:
+        """Clear the output messages panel."""
+        self.output_messages.SetValue("")
 
     def append_message(self, message: str) -> None:
-        """Append a diagnostic message to the output panel."""
+        """Append a line to the output messages panel."""
         current = self.output_messages.GetValue()
         if current:
             self.output_messages.SetValue(current + "\n" + message)
         else:
             self.output_messages.SetValue(message)
         self.output_messages.SetInsertionPointEnd()
-    
-    def clear_messages(self) -> None:
-        """Clear all diagnostic messages from the output panel."""
-        self.output_messages.SetValue("")
-    
-    def get_values(self) -> tuple[str, Path, float, float, str, str, str, str, str, str, bool, bool, bool, bool, str]:
-        """Return dialog values including rendering options."""
-        part_name = self.part_name_input.GetValue()
-        part_family = self.part_family_input.GetValue().strip() or "KiCad2Fritzing Generated"
-        part_type = self.part_type_input.GetValue().strip() or "Custom PCB"
-        out_dir = self._resolve_output_dir(self.dir_input.GetValue())
 
+    def get_values(self):
+        """Read all dialog control values and return them as a tuple."""
+        def _colour_hex(picker) -> str:
+            c = picker.GetColour()
+            return "#{:02x}{:02x}{:02x}".format(c.Red(), c.Green(), c.Blue())
+
+        part_name = self.part_name_input.GetValue().strip()
+        out_dir = self._resolve_output_dir(self.dir_input.GetValue())
         try:
             text_scale = float(self.scale_input.GetValue())
         except ValueError:
             text_scale = 1.15
-
         try:
             pad_scale = float(self.pad_scale_input.GetValue())
         except ValueError:
-            pad_scale = 1.0
-
-        pad_scale = max(0.2, min(3.0, pad_scale))
-
-        soldermask_color = _normalize_hex_color(self.soldermask_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#2b5f82")
-        silkscreen_color = _normalize_hex_color(self.silkscreen_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#f5f5f5")
-        annular_color = _normalize_hex_color(self.annular_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#ffb300")
-        hole_color = _normalize_hex_color(self.hole_color_input.GetColour().GetAsString(wx.C2S_HTML_SYNTAX), "#d84315")
-
-        use_kicad_native_overlay = bool(self.use_kicad_native_overlay.GetValue())
-        include_component_silkscreen = bool(self.include_component_silkscreen.GetValue())
-        include_fab_layer = bool(self.include_fab_layer.GetValue())
-        use_3d_render = bool(self.use_3d_render.GetValue())
-        kicad_cli_path = self.kicad_cli_path_input.GetValue().strip()
+            pad_scale = 0.75
+        soldermask_color = _colour_hex(self.soldermask_color_input)
+        silkscreen_color = _colour_hex(self.silkscreen_color_input)
+        annular_color = _colour_hex(self.annular_color_input)
+        hole_color = _colour_hex(self.hole_color_input)
+        part_family = self.part_family_input.GetValue().strip()
+        part_type = self.part_type_input.GetValue().strip()
+        use_kicad_native_overlay = self.use_kicad_native_overlay.GetValue()
+        include_component_silkscreen = self.include_component_silkscreen.GetValue()
+        include_fab_layer = self.include_fab_layer.GetValue()
+        use_3d_render = self.use_3d_render.GetValue()
+        kicad_cli_path = self.kicad_cli_path_input.GetValue().strip() or None
         return (
             part_name,
             out_dir,
@@ -1522,49 +1457,102 @@ class PCBtoFritzingPartDialog(wx.Dialog if wx else object):  # type: ignore
             kicad_cli_path,
         )
 
+    def _on_generate(self, event) -> None:
+        """Run the export process without closing the dialog."""
+        self.clear_messages()
+        self.generate_btn.Enable(False)
+        try:
+            self._run_export()
+        except Exception as exc:  # noqa: BLE001
+            import traceback
 
-class PCBtoFritzingPartActionPlugin(pcbnew.ActionPlugin if pcbnew else object):
-    """Action plugin wrapper for KiCad's PCB Editor."""
+            self.append_message(f"ERROR: Unexpected export failure: {exc}")
+            self.append_message(traceback.format_exc())
+        finally:
+            self.generate_btn.Enable(True)
 
-    def defaults(self) -> None:
-        self.name = "PCB to Fritzing Part"
-        self.category = "Export"
-        self.description = "Export current KiCad PCB into Fritzing starter assets"
-        self.show_toolbar_button = True
+    def _run_export(self) -> None:
+        """Execute the full export pipeline and log diagnostics to the output panel."""
+        ctx = resolve_runtime_context()
+        self.append_message("--- Runtime diagnostics ---")
+        for line in diagnose_runtime():
+            self.append_message(line)
+        self.append_message("--- Export starting ---")
+        (
+            part_name,
+            out_dir,
+            text_scale,
+            pad_scale,
+            soldermask_color,
+            silkscreen_color,
+            annular_color,
+            hole_color,
+            part_family,
+            part_type,
+            use_kicad_native_overlay,
+            include_component_silkscreen,
+            include_fab_layer,
+            use_3d_render,
+            kicad_cli_path,
+        ) = self.get_values()
 
-        # Keep toolbar button visible even if custom icons are not installed yet.
-        light_icon = _plugin_icon_path("icon_light.png")
-        dark_icon = _plugin_icon_path("icon_dark.png")
-        if light_icon:
-            self.icon_file_name = light_icon
-        if dark_icon:
-            self.dark_icon_file_name = dark_icon
+        request = ExportRequest(
+            board_path=self.board_path,
+            board_handle=self.board,
+            out_dir=out_dir,
+            part_name=part_name,
+            text_scale=text_scale,
+            pad_scale=pad_scale,
+            soldermask_color=soldermask_color,
+            silkscreen_color=silkscreen_color,
+            annular_color=annular_color,
+            hole_color=hole_color,
+            part_family=part_family,
+            part_type=part_type,
+            use_kicad_native_overlay=use_kicad_native_overlay,
+            include_component_silkscreen=include_component_silkscreen,
+            include_fab_layer=include_fab_layer,
+            use_3d_render=use_3d_render,
+            kicad_cli_path=kicad_cli_path,
+        )
+        hooks = ExportHooks(
+            export_board_to_fritzing_stub=export_board_to_fritzing_stub,
+            plot_kicad_svg_layers=plot_kicad_svg_layers,
+            overlay_kicad_plots_on_breadboard=overlay_kicad_plots_on_breadboard,
+            write_overlay_mode_marker=write_overlay_mode_marker,
+            strip_silkscreen_overlays_for_3d=strip_silkscreen_overlays_for_3d,
+            render_board_3d=render_board_3d,
+            embed_3d_render_in_breadboard_svg=embed_3d_render_in_breadboard_svg,
+            build_fritzing_package_zip=build_fritzing_package_zip,
+            detect_kicad_cli=_find_kicad_cli,
+        )
+        run_export_pipeline(
+            request,
+            hooks,
+            append_message=self.append_message,
+            yield_control=lambda: wx.GetApp().Yield(),
+        )
 
-    def Run(self) -> None:  # noqa: N802 - KiCad API uses Run
-        board = pcbnew.GetBoard()
-        board_path = Path(board.GetFileName())
-        
-        # Show dialog to collect user settings
-        if wx is None:
-            # Fallback if wxPython unavailable
-            out_dir = board_path.parent / "fritzing-part"
-            export_board_to_fritzing_stub(board_path, out_dir)
-            write_overlay_mode_marker(
-                out_dir,
-                requested_native_overlay=False,
-                applied_native_overlay=False,
-            )
-            return
-        
-        dlg = PCBtoFritzingPartDialog(None, board_path, board=board)
-        dlg.ShowModal()
-        dlg.Destroy()
+
+def launch_plugin_from_context(board_path: Path, board: object | None = None) -> None:
+    """Launch plugin UX using the provided board path and optional SWIG handle."""
+    if wx is None:
+        out_dir = board_path.parent / "fritzing-part"
+        export_board_to_fritzing_stub(board_path, out_dir)
+        write_overlay_mode_marker(
+            out_dir,
+            requested_native_overlay=False,
+            applied_native_overlay=False,
+        )
+        return
+
+    dlg = PCBtoFritzingPartDialog(None, board_path, board=board)
+    dlg.ShowModal()
+    dlg.Destroy()
 
 
 def register_plugin() -> bool:
-    """Register with KiCad if pcbnew runtime is available."""
-    if pcbnew is None:
-        return False
+    """Register the SWIG ActionPlugin via dedicated SWIG entry shim."""
+    from pcb2fritzing.kicad.swig_entry import register_plugin as register_swig_plugin
 
-    PCBtoFritzingPartActionPlugin().register()
-    return True
+    return register_swig_plugin()
