@@ -16,14 +16,17 @@ Run from repository root:
 Outputs:
     dist/kicad2fritzing-pcm/   – exploded archive directory (inspect / debug)
     dist/KiCad2Fritzing-pcm.zip – PCM-installable zip ("Install from File…")
+    dist/metadata.registry.json – KiCad registry metadata (download/install fields)
 
-Before distributing publicly, update the TODO fields in METADATA below with
-your real GitHub username / contact details, then re-run this script.
+Before distributing publicly, copy scripts/build_config.json.example to
+scripts/build_config.json and update its release/contact fields, then re-run
+this script.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 from pathlib import Path
@@ -43,44 +46,124 @@ else:
 _USERNAME = _config.get("username", "YOURUSERNAME")
 _AUTHOR_NAME = _config.get("author_name", "PCB to Fritzing Part Contributors")
 _CONTACT_WEB = _config.get("contact_web", f"https://github.com/{_USERNAME}/KiCad2Fritzing")
+_VERSION = _config.get("version", "0.1.0")
+_RELEASE_STATUS = _config.get("release_status", "development")
+_KICAD_VERSION = _config.get("kicad_version", "10.0")
+_RUNTIME = _config.get("runtime", "swig")
+_RELEASE_TAG = str(_config.get("release_tag", "")).strip()
+_RELEASE_ASSET_NAME = _config.get("release_asset_name", "PCB2FritzingPart-pcm.zip")
+_DOWNLOAD_URL = str(_config.get("download_url", "")).strip()
+_DOWNLOAD_SHA256 = str(_config.get("download_sha256", "YOUR_SHA256_HERE")).strip()
+_DOWNLOAD_SIZE = int(_config.get("download_size", 0) or 0)
+_INSTALL_SIZE = int(_config.get("install_size", 0) or 0)
+_TAGS = _config.get(
+    "tags",
+    ["bom", "pcbnew", "html", "assembly", "documentation"],
+)
+_PLATFORMS = _config.get("platforms", ["linux", "macos", "windows"])
 
 # ---------------------------------------------------------------------------
 # Package metadata
-# NOTE: download_url / download_sha256 / download_size are intentionally
-# omitted here – they belong only in the repository submission metadata, NOT
-# inside the archive itself (see KiCad PCM docs).
+# Release/distribution fields are sourced from build_config.json so you can
+# bump versions and release links without editing this script.
 # ---------------------------------------------------------------------------
-METADATA: dict = {
-    "$schema": "https://go.kicad.org/pcm/schemas/v2",
-    "name": "PCB to Fritzing Part",
-    "description": "Export KiCad PCB layouts to Fritzing part assets.",
-    "description_full": (
-        "PCB to Fritzing Part is an action plugin for the KiCad PCB editor that "
-        "extracts board layout information — footprints, pads, nets, and board "
-        "outline — and generates Fritzing-compatible part files (.fzp) and SVG "
-        "views ready for use in Fritzing."
-    ),
-    "identifier": f"com.github.{_USERNAME}.pcb2fritzing",
-    "type": "plugin",
-    "author": {
-        "name": _AUTHOR_NAME,
-        "contact": {
-            "web": _CONTACT_WEB,
+
+
+def _resolve_download_url() -> str:
+    if _DOWNLOAD_URL:
+        return _DOWNLOAD_URL
+    if _RELEASE_TAG and _USERNAME != "YOURUSERNAME":
+        return (
+            f"https://github.com/{_USERNAME}/KiCad2Fritzing/releases/download/"
+            f"{_RELEASE_TAG}/{_RELEASE_ASSET_NAME}"
+        )
+    return "<DOWNLOAD_URL>"
+
+
+def _build_metadata_base() -> dict:
+    return {
+        "$schema": "https://go.kicad.org/pcm/schemas/v2",
+        "name": "PCB to Fritzing Part",
+        "description": "Export KiCad PCB layouts to Fritzing part assets.",
+        "description_full": (
+            "PCB to Fritzing Part is an action plugin for the KiCad PCB editor that "
+            "extracts board layout information — footprints, pads, nets, and board "
+            "outline — and generates Fritzing-compatible part files (.fzp) and SVG "
+            "views ready for use in Fritzing."
+        ),
+        "identifier": f"com.github.{_USERNAME}.pcb2fritzing",
+        "type": "plugin",
+        "tags": [str(tag) for tag in _TAGS],
+        "author": {
+            "name": _AUTHOR_NAME,
+            "contact": {
+                "web": _CONTACT_WEB,
+            },
         },
-    },
-    "license": "MIT",
-    "resources": {
-        "homepage": _CONTACT_WEB,
-    },
-    "versions": [
+        "license": "MIT",
+        "resources": {
+            "homepage": _CONTACT_WEB,
+        },
+    }
+
+
+def _version_base() -> dict:
+    return {
+        "version": _VERSION,
+        "status": _RELEASE_STATUS,
+        "kicad_version": _KICAD_VERSION,
+        "platforms": [str(platform) for platform in _PLATFORMS],
+        "runtime": _RUNTIME,
+    }
+
+
+def _build_archive_metadata() -> dict:
+    metadata = _build_metadata_base()
+    # Keep archive metadata stable by excluding volatile download/install fields.
+    metadata["versions"] = [_version_base()]
+    return metadata
+
+
+def _build_registry_metadata(zip_path: Path, install_size: int) -> dict:
+    metadata = _build_metadata_base()
+    metadata["versions"] = [
         {
-            "version": "0.1.0",
-            "status": "development",
-            "kicad_version": "10.0",
-            "runtime": "swig",
+            **_version_base(),
+            "download_sha256": _resolve_download_sha256(zip_path),
+            "download_size": _resolve_download_size(zip_path),
+            "download_url": _resolve_download_url(),
+            "install_size": _INSTALL_SIZE if _INSTALL_SIZE > 0 else install_size,
         }
-    ],
-}
+    ]
+    return metadata
+
+
+def _dir_size_bytes(root: Path) -> int:
+    total = 0
+    for path in root.rglob("*"):
+        if path.is_file():
+            total += path.stat().st_size
+    return total
+
+
+def _file_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as fh:
+        for chunk in iter(lambda: fh.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return f"sha256:{digest.hexdigest()}"
+
+
+def _resolve_download_sha256(zip_path: Path) -> str:
+    if _DOWNLOAD_SHA256 and _DOWNLOAD_SHA256 != "YOUR_SHA256_HERE":
+        return _DOWNLOAD_SHA256
+    return _file_sha256(zip_path)
+
+
+def _resolve_download_size(zip_path: Path) -> int:
+    if _DOWNLOAD_SIZE > 0:
+        return _DOWNLOAD_SIZE
+    return int(zip_path.stat().st_size)
 
 # Top-level action-plugin entry point written into plugins/.
 # KiCad scans files at this level to discover ActionPlugin subclasses.
@@ -203,12 +286,6 @@ def main() -> int:
         shutil.rmtree(archive_root)
     archive_root.mkdir(parents=True)
 
-    # metadata.json at archive root (no download_* keys – those are repo-only)
-    (archive_root / "metadata.json").write_text(
-        json.dumps(METADATA, indent=4, ensure_ascii=False),
-        encoding="utf-8",
-    )
-
     # plugins/ – top-level entry + package
     plugins_dir = archive_root / "plugins"
     plugins_dir.mkdir()
@@ -226,18 +303,44 @@ def main() -> int:
         print(f"ℹ  PCM icon not found at {src_pcm_icon}")
         print("   Add icon.png there to include a package icon in Plugin and Content Manager.")
 
+    install_size = _dir_size_bytes(archive_root)
+
+    # metadata.json packaged inside the archive (stable values only)
+    archive_metadata = _build_archive_metadata()
+    (archive_root / "metadata.json").write_text(
+        json.dumps(archive_metadata, indent=4, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
     # ---- zip ---------------------------------------------------------------
     zip_path = dist_root / "PCB2FritzingPart-pcm.zip"
     if zip_path.exists():
         zip_path.unlink()
     shutil.make_archive(str(zip_path.with_suffix("")), "zip", root_dir=archive_root)
 
+    # Separate registry metadata includes download/install fields tied to the zip.
+    registry_metadata = _build_registry_metadata(zip_path, install_size)
+    registry_metadata_path = dist_root / "metadata.registry.json"
+    registry_metadata_path.write_text(
+        json.dumps(registry_metadata, indent=4, ensure_ascii=False),
+        encoding="utf-8",
+    )
+
     print(f"Exploded archive : {archive_root}")
     print(f"PCM zip          : {zip_path}")
+    print(f"Registry metadata: {registry_metadata_path}")
     print()
-    if "YOURUSERNAME" in METADATA["identifier"]:
-        print("⚠  TODO: update 'identifier', 'author', and 'resources' in METADATA")
-        print("   at the top of this script before distributing publicly.")
+    if "YOURUSERNAME" in archive_metadata["identifier"]:
+        print("⚠  TODO: update identity metadata in scripts/build_config.json")
+        print("   required: username, author_name, and contact_web")
+    version_info = registry_metadata["versions"][0]
+    if (
+        version_info["download_sha256"] == "YOUR_SHA256_HERE"
+        or version_info["download_url"] == "<DOWNLOAD_URL>"
+        or int(version_info["download_size"]) <= 0
+    ):
+        print("⚠  TODO: update release metadata in scripts/build_config.json")
+        print("   required: download_sha256, download_size, and download_url")
     return 0
 
 
