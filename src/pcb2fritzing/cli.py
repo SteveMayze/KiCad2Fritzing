@@ -7,7 +7,17 @@ import logging
 from pathlib import Path
 
 from pcb2fritzing.core.extractor import build_fritzing_package_zip, export_board_to_fritzing_stub
-from pcb2fritzing.kicad.plugin import embed_3d_render_in_breadboard_svg, render_board_3d
+from pcb2fritzing.kicad.export_service import ExportHooks, ExportRequest, run_export_pipeline
+from pcb2fritzing.kicad.plugin import (
+    _find_kicad_cli,
+    embed_3d_render_in_breadboard_svg,
+    overlay_kicad_plots_on_breadboard,
+    plot_kicad_svg_layers,
+    render_board_3d,
+    strip_silkscreen_overlays_for_3d,
+    write_overlay_mode_marker,
+)
+from pcb2fritzing.kicad.runtime_adapter import resolve_runtime_context
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -80,45 +90,49 @@ def main() -> int:
         format="%(levelname)s: %(message)s",
     )
 
-    output_file = export_board_to_fritzing_stub(
-        args.board_file,
-        args.out_dir,
-        part_name=args.part_name,
-        render_options={
-            "include_component_silkscreen": args.include_component_silkscreen,
-            "include_fab_layer": args.include_fab_layer,
-        },
-    )
-    logging.info("Wrote placeholder output: %s", output_file)
-
-    if args.render_3d:
-        import json
-        board_bounds_mm = None
-        model_json_path = args.out_dir / "board_model.json"
-        if model_json_path.exists():
-            model_data = json.loads(model_json_path.read_text(encoding="utf-8"))
-            board_bounds_mm = model_data.get("board_outline", {}).get("bounds_mm")
-        render_diagnostics: list[str] = []
-        render_png = render_board_3d(
-            args.board_file,
-            args.out_dir / "kicad_svg_plots",
-            board_bounds_mm=board_bounds_mm,
-            kicad_cli_path=args.kicad_cli_path,
-            soldermask_color=args.soldermask_color,
-            silkscreen_color=args.silkscreen_color,
-            diagnostics=render_diagnostics,
+    runtime_context = resolve_runtime_context()
+    if runtime_context.runtime == "none":
+        logging.info("--- Execution mode ---")
+        logging.info(
+            "No live KiCad runtime detected; using explicit board-file mode, so SWIG/IPC are not available and the export runs from the .kicad_pcb directly."
         )
-        for line in render_diagnostics:
-            logging.info(line.strip())
-        if render_png:
-            embed_3d_render_in_breadboard_svg(args.out_dir, render_png)
-            logging.info("Embedded 3D render: %s", render_png)
-            # Rebuild fzpz so Fritzing loads the version with the embedded render.
-            fzp_files = list(args.out_dir.glob("*.fzp"))
-            if fzp_files:
-                build_fritzing_package_zip(args.out_dir, part_basename=fzp_files[0].stem)
-        else:
-            logging.warning("3D render failed or kicad-cli not found; breadboard SVG unchanged")
+    else:
+        logging.info("--- Runtime diagnostics ---")
+        logging.info("Live KiCad runtime detected: %s", runtime_context.runtime.upper())
+
+    request = ExportRequest(
+        board_path=args.board_file,
+        board_handle=runtime_context.board_handle,
+        out_dir=args.out_dir,
+        part_name=args.part_name or args.board_file.stem,
+        text_scale=1.15,
+        pad_scale=0.75,
+        soldermask_color="#2b5f82",
+        silkscreen_color="#f5f5f5",
+        annular_color="#ffb300",
+        hole_color="#d84315",
+        part_family="KiCad2Fritzing Generated",
+        part_type="Custom PCB",
+        use_kicad_native_overlay=False,
+        include_component_silkscreen=args.include_component_silkscreen,
+        include_fab_layer=args.include_fab_layer,
+        use_3d_render=args.render_3d,
+        kicad_cli_path=args.kicad_cli_path or "",
+    )
+
+    hooks = ExportHooks(
+        export_board_to_fritzing_stub=export_board_to_fritzing_stub,
+        plot_kicad_svg_layers=plot_kicad_svg_layers,
+        overlay_kicad_plots_on_breadboard=overlay_kicad_plots_on_breadboard,
+        write_overlay_mode_marker=write_overlay_mode_marker,
+        strip_silkscreen_overlays_for_3d=strip_silkscreen_overlays_for_3d,
+        render_board_3d=render_board_3d,
+        embed_3d_render_in_breadboard_svg=embed_3d_render_in_breadboard_svg,
+        build_fritzing_package_zip=build_fritzing_package_zip,
+        detect_kicad_cli=_find_kicad_cli,
+    )
+
+    run_export_pipeline(request, hooks, append_message=logging.info)
 
     return 0
 
