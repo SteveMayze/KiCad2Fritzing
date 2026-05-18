@@ -9,9 +9,6 @@
     "release_tag": "v0.1.0-beta",
     "release_asset_name": "PCB2FritzingPart-pcm.zip",
     "download_url": "https://github.com/YOURUSERNAME/KiCad2Fritzing/releases/download/v0.1.0-beta/PCB2FritzingPart-pcm.zip",
-    "download_sha256": "YOUR_SHA256_HERE",
-    "download_size": 0,
-    "install_size": 0,
     "tags": [
         "bom",
         "pcbnew",
